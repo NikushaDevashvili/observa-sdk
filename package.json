@@ -1,0 +1,35 @@
+{
+  "name": "observa-sdk",
+  "version": "0.0.1",
+  "description": "Enterprise-grade observability SDK for AI applications. Track and monitor LLM interactions with zero friction.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "observability",
+    "llm",
+    "ai",
+    "observa",
+    "monitoring",
+    "tracing",
+    "analytics"
+  ],
+  "author": "Nicka",
+  "license": "MIT"
+}

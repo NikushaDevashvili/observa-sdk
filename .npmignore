@@ -1,0 +1,51 @@
+# Source files (only dist/ is needed in published package)
+src/
+tsconfig.json
+
+# Development files
+*.md
+!README.md
+*.sh
+*.js
+!dist/**/*.js
+
+# Dependencies and lock files
+package-lock.json
+node_modules/
+
+# Test files
+test/
+tests/
+*.test.*
+*.spec.*
+
+# Development tools
+.git/
+.gitignore
+.npmignore
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build artifacts (keep dist, but ignore source maps if desired)
+# *.map
+
