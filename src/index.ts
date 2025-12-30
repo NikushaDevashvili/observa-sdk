@@ -141,6 +141,12 @@ export interface TrackEventInput {
   context?: string;
   model?: string;
   metadata?: Record<string, any>;
+  // Conversation tracking fields
+  conversationId?: string;  // Long-lived conversation identifier
+  sessionId?: string;       // Short-lived session identifier
+  userId?: string;          // End-user identifier
+  messageIndex?: number;    // Position in conversation (1, 2, 3...)
+  parentMessageId?: string;  // For threaded conversations
 }
 
 interface TraceData {
@@ -178,6 +184,13 @@ interface TraceData {
   systemFingerprint?: string | null;
 
   headers?: Record<string, string>;
+
+  // Conversation tracking fields
+  conversationId?: string;
+  sessionId?: string;
+  userId?: string;
+  messageIndex?: number;
+  parentMessageId?: string;
 }
 
 // ---------- SSE helpers (for OpenAI-style streamed chunks) ----------
@@ -477,7 +490,8 @@ export class Observa {
 
     const [stream1, stream2] = originalResponse.body.tee();
 
-    // don’t await => never block user
+    // don't await => never block user, but log to track execution
+    console.log(`[Observa] Starting captureStream for trace ${traceId}`);
     this.captureStream({
       stream: stream2,
       event,
@@ -488,6 +502,8 @@ export class Observa {
       status: originalResponse.status,
       statusText: originalResponse.statusText,
       headers: responseHeaders,
+    }).catch((err) => {
+      console.error("[Observa] captureStream promise rejected:", err);
     });
 
     return new Response(stream1, {
@@ -520,6 +536,7 @@ export class Observa {
       headers,
     } = args;
 
+    console.log(`[Observa] captureStream started for trace ${traceId}`);
     try {
       const reader = stream.getReader();
       const decoder = new TextDecoder();
@@ -632,11 +649,29 @@ export class Observa {
         systemFingerprint: extracted.systemFingerprint ?? null,
 
         ...(headers !== undefined && { headers }),
+
+        // Conversation tracking fields
+        ...(event.conversationId !== undefined && { conversationId: event.conversationId }),
+        ...(event.sessionId !== undefined && { sessionId: event.sessionId }),
+        ...(event.userId !== undefined && { userId: event.userId }),
+        ...(event.messageIndex !== undefined && { messageIndex: event.messageIndex }),
+        ...(event.parentMessageId !== undefined && { parentMessageId: event.parentMessageId }),
       };
 
+      console.log(
+        `[Observa] Trace data prepared, calling sendTrace for ${traceId}, response length: ${fullResponse.length}`
+      );
       await this.sendTrace(traceData);
+      console.log(`[Observa] sendTrace completed for ${traceId}`);
     } catch (err) {
       console.error("[Observa] Error capturing stream:", err);
+      if (err instanceof Error) {
+        console.error("[Observa] Error name:", err.name);
+        console.error("[Observa] Error message:", err.message);
+        if (err.stack) {
+          console.error("[Observa] Error stack:", err.stack);
+        }
+      }
     }
   }
 
@@ -648,37 +683,83 @@ export class Observa {
 
     // Send to Observa backend (which forwards to Tinybird)
     try {
-      const url = `${this.apiUrl}/api/v1/traces/ingest`;
+      // Remove trailing slash from apiUrl if present, then add the path
+      const baseUrl = this.apiUrl.replace(/\/+$/, "");
+      const url = `${baseUrl}/api/v1/traces/ingest`;
 
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(trace),
-      });
+      // Enhanced logging for debugging (always log in production too)
+      // Single combined log to avoid Vercel truncation
+      console.log(
+        `[Observa] Sending trace - URL: ${url}, TraceID: ${
+          trace.traceId
+        }, Tenant: ${trace.tenantId}, Project: ${trace.projectId}, APIKey: ${
+          this.apiKey ? `Yes(${this.apiKey.length} chars)` : "No"
+        }`
+      );
 
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        let errorJson: any;
-        try {
-          errorJson = JSON.parse(errorText);
-        } catch {
-          errorJson = { error: errorText };
-        }
+      // Add timeout to prevent hanging requests (10 seconds)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-        console.error(
-          `[Observa] Backend API error: ${response.status} ${response.statusText}`,
-          errorJson.error || errorText
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(trace),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        // Always log response status for debugging
+        console.log(
+          `[Observa] Response status: ${response.status} ${response.statusText}`
         );
-      } else if (!this.isProduction) {
-        console.log(`✅ [Observa] Trace sent successfully`);
-        console.log(`   Trace ID: ${trace.traceId}`);
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "Unknown error");
+          let errorJson: any;
+          try {
+            errorJson = JSON.parse(errorText);
+          } catch {
+            errorJson = { error: errorText };
+          }
+
+          console.error(
+            `[Observa] Backend API error: ${response.status} ${response.statusText}`,
+            errorJson.error || errorText
+          );
+        } else {
+          // Log success even in production for debugging
+          console.log(
+            `✅ [Observa] Trace sent successfully - Trace ID: ${trace.traceId}`
+          );
+        }
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if (fetchError instanceof Error && fetchError.name === "AbortError") {
+          console.error("[Observa] Request timeout after 10 seconds");
+        }
+        throw fetchError;
       }
     } catch (error) {
-      // Fail silently: never crash user app
+      // Enhanced error logging
       console.error("[Observa] Failed to send trace:", error);
+      if (error instanceof Error) {
+        console.error("[Observa] Error message:", error.message);
+        console.error("[Observa] Error name:", error.name);
+        if (error.name === "AbortError") {
+          console.error(
+            "[Observa] Request timed out - check network connectivity and API URL"
+          );
+        }
+        if (error.stack) {
+          console.error("[Observa] Error stack:", error.stack);
+        }
+      }
     }
   }
 }

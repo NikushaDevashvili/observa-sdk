@@ -15,6 +15,7 @@ npm install observa-sdk
 Get your API key by signing up at [https://app.observa.ai/signup](https://app.observa.ai/signup) (or your Observa API endpoint).
 
 The signup process automatically:
+
 - Creates your tenant account
 - Sets up a default "Production" project
 - Provisions your Tinybird token
@@ -53,12 +54,15 @@ const observa = init({
 });
 
 // Track AI interactions with simple wrapping
-const response = await observa.track(
-  { query: "What is the weather?" },
-  () => fetch("https://api.openai.com/v1/chat/completions", {
+const response = await observa.track({ query: "What is the weather?" }, () =>
+  fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
-    headers: { /* ... */ },
-    body: JSON.stringify({ /* ... */ }),
+    headers: {
+      /* ... */
+    },
+    body: JSON.stringify({
+      /* ... */
+    }),
   })
 );
 ```
@@ -116,6 +120,7 @@ The SDK supports JWT-formatted API keys that encode tenant context:
 ```
 
 **JWT Structure**:
+
 - `tenantId` (required): Unique identifier for the tenant/organization
 - `projectId` (required): Project identifier within the tenant
 - `environment` (optional): `"dev"` or `"prod"` (defaults to `"dev"`)
@@ -163,6 +168,7 @@ Initialize the Observa SDK instance.
 Track an AI interaction.
 
 **Parameters**:
+
 - `event.query` (required): The user query/prompt
 - `event.context` (optional): Additional context
 - `event.model` (optional): Model identifier
@@ -172,6 +178,7 @@ Track an AI interaction.
 **Returns**: `Promise<Response>` (the original response, unmodified)
 
 **Example**:
+
 ```typescript
 const response = await observa.track(
   {
@@ -179,17 +186,18 @@ const response = await observa.track(
     model: "gpt-4",
     metadata: { userId: "123" },
   },
-  () => fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${openaiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "gpt-4",
-      messages: [{ role: "user", content: "What is machine learning?" }],
-    }),
-  })
+  () =>
+    fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openaiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4",
+        messages: [{ role: "user", content: "What is machine learning?" }],
+      }),
+    })
 );
 ```
 
@@ -248,4 +256,3 @@ The entire onboarding process takes less than 5 minutes, and you can start track
 ## License
 
 MIT
-

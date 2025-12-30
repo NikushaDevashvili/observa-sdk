@@ -1,0 +1,5 @@
+test_id String
+name String
+value UInt32
+
+

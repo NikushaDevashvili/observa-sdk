@@ -1,0 +1,16 @@
+SCHEMA >
+    `tenant_id` String,
+    `project_id` String,
+    `environment` Enum8('dev' = 1, 'prod' = 2),
+    `timestamp` DateTime64(3),
+    `trace_id` String,
+    `query` String,
+    `response` String,
+    `response_length` UInt32,
+    `latency_ms` UInt32,
+    `tokens_total` Nullable(UInt32)
+
+ENGINE MergeTree
+ORDER BY (tenant_id, project_id, timestamp, trace_id)
+
+
