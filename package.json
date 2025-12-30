@@ -1,6 +1,6 @@
 {
   "name": "observa-sdk",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Enterprise-grade observability SDK for AI applications. Track and monitor LLM interactions with zero friction.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -31,5 +31,8 @@
     "analytics"
   ],
   "author": "Nicka",
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }
