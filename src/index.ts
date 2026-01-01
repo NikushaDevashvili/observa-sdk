@@ -7,6 +7,17 @@
 // - Sends events to Tinybird Events API in NDJSON
 // ------------------------------------------------------------
 
+// Import context propagation (Node.js only)
+let contextModule: any = null;
+try {
+  // Dynamic import to handle browser environments
+  if (typeof require !== "undefined") {
+    contextModule = require("./context.js");
+  }
+} catch {
+  // Context propagation not available (browser environment)
+}
+
 // Helper: safely access NODE_ENV without type issues
 function getNodeEnv(): string | undefined {
   try {
@@ -399,6 +410,14 @@ export class Observa {
   private sampleRate: number;
   private maxResponseChars: number;
 
+  // Buffering and retry
+  private eventBuffer: TraceData[] = [];
+  private flushPromise: Promise<void> | null = null;
+  private flushInProgress = false;
+  private maxBufferSize = 100;
+  private flushIntervalMs = 5000; // Flush every 5 seconds
+  private flushIntervalId: NodeJS.Timeout | null = null;
+
   constructor(config: ObservaInitConfig) {
     this.apiKey = config.apiKey;
 
@@ -467,9 +486,109 @@ export class Observa {
         }`
       );
     }
+
+    // Start periodic flush (in Node.js environment)
+    try {
+      if (typeof setInterval !== "undefined") {
+        this.flushIntervalId = setInterval(() => {
+          this.flush().catch((err) => {
+            console.error("[Observa] Periodic flush failed:", err);
+          });
+        }, this.flushIntervalMs);
+      }
+    } catch {
+      // Not available in browser/edge runtime
+    }
   }
 
-  async track(event: TrackEventInput, action: () => Promise<Response>) {
+  /**
+   * Flush buffered events to the API
+   * Returns a promise that resolves when all events are sent
+   */
+  async flush(): Promise<void> {
+    if (this.flushInProgress || this.eventBuffer.length === 0) {
+      return this.flushPromise || Promise.resolve();
+    }
+
+    this.flushInProgress = true;
+    this.flushPromise = this._doFlush();
+    
+    try {
+      await this.flushPromise;
+    } finally {
+      this.flushInProgress = false;
+      this.flushPromise = null;
+    }
+  }
+
+  /**
+   * Internal flush implementation
+   */
+  private async _doFlush(): Promise<void> {
+    const eventsToFlush = [...this.eventBuffer];
+    this.eventBuffer = [];
+
+    if (eventsToFlush.length === 0) {
+      return;
+    }
+
+    // Send events with retry logic
+    for (const event of eventsToFlush) {
+      await this._sendTraceWithRetry(event);
+    }
+  }
+
+  /**
+   * Send trace with exponential backoff retry
+   */
+  private async _sendTraceWithRetry(
+    trace: TraceData,
+    maxRetries: number = 3
+  ): Promise<void> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await this.sendTrace(trace);
+        return; // Success
+      } catch (error) {
+        if (attempt === maxRetries) {
+          // Final attempt failed - re-buffer for later
+          console.error(
+            `[Observa] Failed to send trace after ${maxRetries + 1} attempts, re-buffering:`,
+            error
+          );
+          this.eventBuffer.push(trace);
+          // Prevent buffer from growing too large
+          if (this.eventBuffer.length > this.maxBufferSize * 2) {
+            this.eventBuffer.shift(); // Drop oldest event
+          }
+          return;
+        }
+
+        // Exponential backoff: 100ms, 200ms, 400ms
+        const delayMs = 100 * Math.pow(2, attempt);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  /**
+   * Cleanup (call when shutting down)
+   */
+  async end(): Promise<void> {
+    if (this.flushIntervalId) {
+      clearInterval(this.flushIntervalId);
+      this.flushIntervalId = null;
+    }
+
+    // Flush remaining events
+    await this.flush();
+  }
+
+  async track(
+    event: TrackEventInput,
+    action: () => Promise<Response>,
+    options?: { trackBlocking?: boolean }
+  ) {
     // sampling (cheap control knob)
     if (this.sampleRate < 1 && Math.random() > this.sampleRate) {
       return action();
@@ -479,7 +598,16 @@ export class Observa {
     const traceId = crypto.randomUUID();
     const spanId = traceId; // MVP: 1 span per trace
 
-    const originalResponse = await action();
+    // Set up context propagation
+    const runWithContext = contextModule?.runInTraceContextAsync || 
+      ((ctx: any, fn: () => Promise<any>) => fn());
+    const context = contextModule?.createSpanContext?.(
+      traceId,
+      spanId,
+      null
+    ) || { traceId, spanId, parentSpanId: null };
+
+    const originalResponse = await runWithContext(context, action);
     if (!originalResponse.body) return originalResponse;
 
     // capture response headers
@@ -490,21 +618,28 @@ export class Observa {
 
     const [stream1, stream2] = originalResponse.body.tee();
 
-    // don't await => never block user, but log to track execution
-    console.log(`[Observa] Starting captureStream for trace ${traceId}`);
-    this.captureStream({
+    // Capture stream (with blocking option for serverless)
+    const capturePromise = this.captureStream({
       stream: stream2,
       event,
       traceId,
       spanId,
-      parentSpanId: null,
+      parentSpanId: context.parentSpanId,
       startTime,
       status: originalResponse.status,
       statusText: originalResponse.statusText,
       headers: responseHeaders,
-    }).catch((err) => {
-      console.error("[Observa] captureStream promise rejected:", err);
     });
+
+    if (options?.trackBlocking) {
+      // Block until trace is sent (for serverless)
+      await capturePromise;
+    } else {
+      // Don't await (fire and forget, but log errors)
+      capturePromise.catch((err) => {
+        console.error("[Observa] captureStream promise rejected:", err);
+      });
+    }
 
     return new Response(stream1, {
       headers: originalResponse.headers,
@@ -661,8 +796,31 @@ export class Observa {
       console.log(
         `[Observa] Trace data prepared, calling sendTrace for ${traceId}, response length: ${fullResponse.length}`
       );
-      await this.sendTrace(traceData);
-      console.log(`[Observa] sendTrace completed for ${traceId}`);
+
+      // Add to buffer (will be flushed periodically or on explicit flush())
+      this.eventBuffer.push(traceData);
+
+      // Auto-flush if buffer is full
+      if (this.eventBuffer.length >= this.maxBufferSize) {
+        this.flush().catch((err) => {
+          console.error("[Observa] Auto-flush failed:", err);
+        });
+      } else {
+        // Send immediately (with retry logic)
+        this._sendTraceWithRetry(traceData).catch((err) => {
+          console.error("[Observa] Failed to send trace:", err);
+        });
+      }
+
+      // Magic link in dev mode
+      if (!this.isProduction) {
+        const traceUrl = `${this.apiUrl.replace(/\/api.*$/, "")}/traces/${traceId}`;
+        console.log(
+          `[Observa] 🕊️ Trace captured: ${traceUrl}`
+        );
+      }
+
+      console.log(`[Observa] Trace queued for sending: ${traceId}`);
     } catch (err) {
       console.error("[Observa] Error capturing stream:", err);
       if (err instanceof Error) {
@@ -675,7 +833,10 @@ export class Observa {
     }
   }
 
-  private async sendTrace(trace: TraceData) {
+  /**
+   * Send a single trace (internal method, use _sendTraceWithRetry for retry logic)
+   */
+  private async sendTrace(trace: TraceData): Promise<void> {
     // Dev mode: show pretty logs for debugging
     if (!this.isProduction) {
       formatBeautifulLog(trace);
