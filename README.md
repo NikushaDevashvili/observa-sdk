@@ -201,6 +201,166 @@ const response = await observa.track(
 );
 ```
 
+### `observa.trackFeedback(options)`
+
+Track user feedback (likes, dislikes, ratings, corrections) for AI interactions.
+
+**Parameters**:
+
+- `options.type` (required): Feedback type - `"like"` | `"dislike"` | `"rating"` | `"correction"`
+- `options.rating` (optional): Rating value (1-5 scale, automatically clamped). Required for `"rating"` type.
+- `options.comment` (optional): User comment/feedback text
+- `options.outcome` (optional): Outcome classification - `"success"` | `"failure"` | `"partial"`
+- `options.conversationId` (optional): Conversation identifier for context
+- `options.sessionId` (optional): Session identifier for context
+- `options.userId` (optional): User identifier for context
+- `options.messageIndex` (optional): Position in conversation (1, 2, 3...)
+- `options.parentMessageId` (optional): For threaded conversations
+- `options.agentName` (optional): Agent/application name
+- `options.version` (optional): Application version
+- `options.route` (optional): API route/endpoint
+- `options.parentSpanId` (optional): Attach feedback to a specific span (e.g., LLM call span)
+- `options.spanId` (optional): Custom span ID for feedback (auto-generated if not provided)
+
+**Returns**: `string` - The span ID of the feedback event
+
+**Examples**:
+
+#### Basic Like/Dislike Feedback
+
+```typescript
+// User clicks "like" button after receiving AI response
+const feedbackSpanId = observa.trackFeedback({
+  type: "like",
+  outcome: "success",
+  conversationId: "conv-123",
+  userId: "user-456",
+});
+
+// User clicks "dislike" button
+observa.trackFeedback({
+  type: "dislike",
+  outcome: "failure",
+  comment: "The answer was incorrect",
+  conversationId: "conv-123",
+  userId: "user-456",
+});
+```
+
+#### Rating Feedback (1-5 Scale)
+
+```typescript
+// User provides a 5-star rating
+observa.trackFeedback({
+  type: "rating",
+  rating: 5, // Automatically clamped to 1-5 range
+  comment: "Excellent response!",
+  outcome: "success",
+  conversationId: "conv-123",
+  userId: "user-456",
+});
+
+// Rating is automatically validated (e.g., 10 becomes 5, -1 becomes 1)
+observa.trackFeedback({
+  type: "rating",
+  rating: 10, // Will be clamped to 5
+  conversationId: "conv-123",
+});
+```
+
+#### Correction Feedback
+
+```typescript
+// User provides correction/feedback
+observa.trackFeedback({
+  type: "correction",
+  comment: "The capital of France is Paris, not Lyon",
+  outcome: "partial",
+  conversationId: "conv-123",
+  userId: "user-456",
+});
+```
+
+#### Linking Feedback to Specific Spans
+
+```typescript
+// Start a trace and track LLM call
+const traceId = observa.startTrace({
+  conversationId: "conv-123",
+  userId: "user-456",
+});
+
+const llmSpanId = observa.trackLLMCall({
+  model: "gpt-4",
+  input: "What is the capital of France?",
+  output: "The capital of France is Paris.",
+  // ... other LLM call data
+});
+
+// Link feedback directly to the LLM call span
+observa.trackFeedback({
+  type: "like",
+  parentSpanId: llmSpanId, // Attach feedback to the specific LLM call
+  conversationId: "conv-123",
+  userId: "user-456",
+});
+```
+
+#### Full Context Feedback
+
+```typescript
+// Track feedback with complete context for analytics
+observa.trackFeedback({
+  type: "rating",
+  rating: 4,
+  comment: "Good answer, but could be more detailed",
+  outcome: "partial",
+  conversationId: "conv-123",
+  sessionId: "session-789",
+  userId: "user-456",
+  messageIndex: 3,
+  agentName: "customer-support-bot",
+  version: "v2.1.0",
+  route: "/api/chat",
+});
+```
+
+#### Feedback in Conversation Flow
+
+```typescript
+// Track feedback as part of a conversation
+const traceId = observa.startTrace({
+  conversationId: "conv-123",
+  sessionId: "session-789",
+  userId: "user-456",
+  messageIndex: 1,
+});
+
+// ... perform AI operations ...
+
+// User provides feedback after message 1
+observa.trackFeedback({
+  type: "like",
+  conversationId: "conv-123",
+  sessionId: "session-789",
+  userId: "user-456",
+  messageIndex: 1, // Link to specific message in conversation
+});
+
+await observa.endTrace();
+```
+
+**Best Practices**:
+
+1. **Always include context**: Provide `conversationId`, `userId`, and `sessionId` when available for better analytics
+2. **Link to spans**: Use `parentSpanId` to attach feedback to specific LLM calls or operations
+3. **Use appropriate types**: 
+   - `"like"` / `"dislike"` for binary feedback
+   - `"rating"` for 1-5 star ratings
+   - `"correction"` for user corrections or detailed feedback
+4. **Include comments**: Comments provide valuable qualitative feedback for improving AI responses
+5. **Set outcome**: Use `outcome` to classify feedback (`"success"` for positive, `"failure"` for negative, `"partial"` for mixed)
+
 ## Data Captured
 
 The SDK automatically captures:
