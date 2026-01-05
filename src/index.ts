@@ -11,8 +11,9 @@
 let contextModule: any = null;
 try {
   // Dynamic import to handle browser environments
-  if (typeof require !== "undefined") {
-    contextModule = require("./context.js");
+  const requireFn = (globalThis as any).require;
+  if (typeof requireFn !== "undefined") {
+    contextModule = requireFn("./context.js");
   }
 } catch {
   // Context propagation not available (browser environment)
@@ -153,11 +154,11 @@ export interface TrackEventInput {
   model?: string;
   metadata?: Record<string, any>;
   // Conversation tracking fields
-  conversationId?: string;  // Long-lived conversation identifier
-  sessionId?: string;       // Short-lived session identifier
-  userId?: string;          // End-user identifier
-  messageIndex?: number;    // Position in conversation (1, 2, 3...)
-  parentMessageId?: string;  // For threaded conversations
+  conversationId?: string; // Long-lived conversation identifier
+  sessionId?: string; // Short-lived session identifier
+  userId?: string; // End-user identifier
+  messageIndex?: number; // Position in conversation (1, 2, 3...)
+  parentMessageId?: string; // For threaded conversations
 }
 
 interface TraceData {
@@ -202,6 +203,74 @@ interface TraceData {
   userId?: string;
   messageIndex?: number;
   parentMessageId?: string;
+}
+
+/**
+ * Canonical event format for Observa API
+ */
+type EventType =
+  | "llm_call"
+  | "tool_call"
+  | "retrieval"
+  | "error"
+  | "feedback"
+  | "output"
+  | "trace_start"
+  | "trace_end";
+
+interface CanonicalEvent {
+  tenant_id: string;
+  project_id: string;
+  environment: "dev" | "prod";
+  trace_id: string;
+  span_id: string;
+  parent_span_id: string | null;
+  timestamp: string;
+  event_type: EventType;
+  conversation_id?: string | null;
+  session_id?: string | null;
+  user_id?: string | null;
+  agent_name?: string | null;
+  version?: string | null;
+  route?: string | null;
+  attributes: {
+    llm_call?: {
+      model: string;
+      input?: string | null;
+      output?: string | null;
+      input_tokens?: number | null;
+      output_tokens?: number | null;
+      total_tokens?: number | null;
+      latency_ms: number;
+      time_to_first_token_ms?: number | null;
+      streaming_duration_ms?: number | null;
+      finish_reason?: string | null;
+      response_id?: string | null;
+      system_fingerprint?: string | null;
+      cost?: number | null;
+    };
+    output?: {
+      final_output?: string | null;
+      output_length?: number | null;
+    };
+    feedback?: {
+      type: "like" | "dislike" | "rating" | "correction";
+      rating?: number | null;
+      comment?: string | null;
+      outcome?: "success" | "failure" | "partial" | null;
+    };
+    trace_start?: {
+      name?: string | null;
+      metadata?: Record<string, any> | null;
+    };
+    trace_end?: {
+      total_latency_ms?: number | null;
+      total_tokens?: number | null;
+      total_cost?: number | null;
+      outcome?: "success" | "error" | "timeout" | null;
+    };
+    [key: string]: any;
+  };
 }
 
 // ---------- SSE helpers (for OpenAI-style streamed chunks) ----------
@@ -410,13 +479,19 @@ export class Observa {
   private sampleRate: number;
   private maxResponseChars: number;
 
-  // Buffering and retry
-  private eventBuffer: TraceData[] = [];
+  // Buffering and retry (now stores canonical events)
+  private eventBuffer: CanonicalEvent[] = [];
   private flushPromise: Promise<void> | null = null;
   private flushInProgress = false;
   private maxBufferSize = 100;
   private flushIntervalMs = 5000; // Flush every 5 seconds
-  private flushIntervalId: NodeJS.Timeout | null = null;
+  private flushIntervalId: ReturnType<typeof setInterval> | null = null;
+
+  // Span hierarchy tracking (for manual trace management)
+  private currentTraceId: string | null = null;
+  private rootSpanId: string | null = null;
+  private spanStack: string[] = []; // Stack for tracking parent-child relationships
+  private traceStartTime: number | null = null;
 
   constructor(config: ObservaInitConfig) {
     this.apiKey = config.apiKey;
@@ -512,13 +587,479 @@ export class Observa {
 
     this.flushInProgress = true;
     this.flushPromise = this._doFlush();
-    
+
     try {
       await this.flushPromise;
     } finally {
       this.flushInProgress = false;
       this.flushPromise = null;
     }
+  }
+
+  /**
+   * Helper: Create base event properties
+   */
+  private createBaseEventProperties(): {
+    tenant_id: string;
+    project_id: string;
+    environment: "dev" | "prod";
+    trace_id: string;
+  } {
+    const traceId = this.currentTraceId || crypto.randomUUID();
+    return {
+      tenant_id: this.tenantId,
+      project_id: this.projectId,
+      environment: this.environment,
+      trace_id: traceId,
+    };
+  }
+
+  /**
+   * Helper: Add event to buffer with proper span hierarchy
+   */
+  private addEvent(
+    eventData: Partial<CanonicalEvent> & {
+      event_type: EventType;
+      attributes: any;
+    }
+  ): void {
+    const baseProps = this.createBaseEventProperties();
+    const parentSpanId =
+      this.spanStack.length > 0
+        ? this.spanStack[this.spanStack.length - 1]
+        : null;
+
+    const event: CanonicalEvent = {
+      ...baseProps,
+      span_id: eventData.span_id || crypto.randomUUID(),
+      parent_span_id:
+        (eventData.parent_span_id !== undefined
+          ? eventData.parent_span_id
+          : parentSpanId) ?? null,
+      timestamp: eventData.timestamp || new Date().toISOString(),
+      event_type: eventData.event_type,
+      conversation_id: eventData.conversation_id ?? null,
+      session_id: eventData.session_id ?? null,
+      user_id: eventData.user_id ?? null,
+      agent_name: eventData.agent_name ?? null,
+      version: eventData.version ?? null,
+      route: eventData.route ?? null,
+      attributes: eventData.attributes,
+    };
+
+    this.eventBuffer.push(event);
+
+    // Auto-flush if buffer is full
+    if (this.eventBuffer.length >= this.maxBufferSize) {
+      this.flush().catch((err) => {
+        console.error("[Observa] Auto-flush failed:", err);
+      });
+    }
+  }
+
+  /**
+   * Start a new trace (manual trace management)
+   */
+  startTrace(
+    options: {
+      name?: string;
+      metadata?: Record<string, any>;
+      conversationId?: string;
+      sessionId?: string;
+      userId?: string;
+    } = {}
+  ): string {
+    // End previous trace if active
+    if (this.currentTraceId) {
+      console.warn("[Observa] Ending previous trace before starting new one");
+      this.endTrace().catch(console.error);
+    }
+
+    this.currentTraceId = crypto.randomUUID();
+    this.rootSpanId = crypto.randomUUID();
+    this.spanStack = [this.rootSpanId];
+    this.traceStartTime = Date.now();
+
+    this.addEvent({
+      event_type: "trace_start",
+      span_id: this.rootSpanId,
+      parent_span_id: null,
+      conversation_id: options.conversationId || null,
+      session_id: options.sessionId || null,
+      user_id: options.userId || null,
+      attributes: {
+        trace_start: {
+          name: options.name || null,
+          metadata: options.metadata || null,
+        },
+      },
+    });
+
+    return this.currentTraceId;
+  }
+
+  /**
+   * Track a tool call
+   */
+  trackToolCall(options: {
+    toolName: string;
+    args?: Record<string, any>;
+    result?: any;
+    resultStatus: "success" | "error" | "timeout";
+    latencyMs: number;
+    errorMessage?: string;
+  }): string {
+    const spanId = crypto.randomUUID();
+
+    this.addEvent({
+      event_type: "tool_call",
+      span_id: spanId,
+      attributes: {
+        tool_call: {
+          tool_name: options.toolName,
+          args: options.args || null,
+          result: options.result || null,
+          result_status: options.resultStatus,
+          latency_ms: options.latencyMs,
+          error_message: options.errorMessage || null,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Track a retrieval operation
+   */
+  trackRetrieval(options: {
+    contextIds?: string[];
+    contextHashes?: string[];
+    k?: number;
+    similarityScores?: number[];
+    latencyMs: number;
+  }): string {
+    const spanId = crypto.randomUUID();
+
+    this.addEvent({
+      event_type: "retrieval",
+      span_id: spanId,
+      attributes: {
+        retrieval: {
+          retrieval_context_ids: options.contextIds || null,
+          retrieval_context_hashes: options.contextHashes || null,
+          k: options.k || null,
+          top_k: options.k || null,
+          similarity_scores: options.similarityScores || null,
+          latency_ms: options.latencyMs,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Track an error with stack trace support
+   */
+  trackError(options: {
+    errorType: string;
+    errorMessage: string;
+    stackTrace?: string;
+    context?: Record<string, any>;
+    error?: Error; // Optional Error object - will extract stack trace if provided
+  }): string {
+    const spanId = crypto.randomUUID();
+
+    // Extract stack trace from Error object if provided
+    let stackTrace = options.stackTrace;
+    if (!stackTrace && options.error instanceof Error && options.error.stack) {
+      stackTrace = options.error.stack;
+    }
+
+    this.addEvent({
+      event_type: "error",
+      span_id: spanId,
+      attributes: {
+        error: {
+          error_type: options.errorType,
+          error_message: options.errorMessage,
+          stack_trace: stackTrace || null,
+          context: options.context || null,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Track user feedback
+   */
+  trackFeedback(options: {
+    type: "like" | "dislike" | "rating" | "correction";
+    rating?: number; // 1-5 scale for rating type
+    comment?: string;
+    outcome?: "success" | "failure" | "partial";
+    // Optional context to tie feedback to user/session/conversation
+    conversationId?: string;
+    sessionId?: string;
+    userId?: string;
+    messageIndex?: number;
+    parentMessageId?: string;
+    agentName?: string;
+    version?: string;
+    route?: string;
+    // Optional linkage: attach under an existing span
+    parentSpanId?: string | null;
+    spanId?: string; // provide to control span id for feedback
+  }): string {
+    const spanId = options.spanId || crypto.randomUUID();
+    const parentSpanId: string | null = (options.parentSpanId ??
+      (this.spanStack.length > 0
+        ? this.spanStack[this.spanStack.length - 1]
+        : null)) as string | null;
+
+    // Clamp rating to 1-5 if provided
+    let rating: number | null | undefined = options.rating;
+    if (rating !== undefined && rating !== null) {
+      rating = Math.max(1, Math.min(5, rating));
+    }
+
+    this.addEvent({
+      event_type: "feedback",
+      span_id: spanId,
+      parent_span_id: parentSpanId ?? null,
+      conversation_id: options.conversationId ?? null,
+      session_id: options.sessionId ?? null,
+      user_id: options.userId ?? null,
+      agent_name: options.agentName ?? null,
+      version: options.version ?? null,
+      route: options.route ?? null,
+      attributes: {
+        feedback: {
+          type: options.type,
+          rating: rating ?? null,
+          comment: options.comment || null,
+          outcome: options.outcome || null,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Track final output
+   */
+  trackOutput(options: {
+    finalOutput?: string;
+    outputLength?: number;
+  }): string {
+    const spanId = crypto.randomUUID();
+
+    this.addEvent({
+      event_type: "output",
+      span_id: spanId,
+      attributes: {
+        output: {
+          final_output: options.finalOutput || null,
+          output_length: options.outputLength || null,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Execute a function within a span context (for nested operations)
+   * This allows tool calls to be nested under LLM calls, etc.
+   */
+  withSpan<T>(spanId: string, fn: () => T): T {
+    this.spanStack.push(spanId);
+    try {
+      return fn();
+    } finally {
+      this.spanStack.pop();
+    }
+  }
+
+  /**
+   * Execute an async function within a span context (for nested operations)
+   */
+  async withSpanAsync<T>(spanId: string, fn: () => Promise<T>): Promise<T> {
+    this.spanStack.push(spanId);
+    try {
+      return await fn();
+    } finally {
+      this.spanStack.pop();
+    }
+  }
+
+  /**
+   * End trace and send events (manual trace management)
+   */
+  async endTrace(
+    options: {
+      outcome?: "success" | "error" | "timeout";
+    } = {}
+  ): Promise<string> {
+    if (!this.currentTraceId || !this.rootSpanId) {
+      throw new Error("[Observa] No active trace. Call startTrace() first.");
+    }
+
+    // Calculate summary statistics from buffered events for this trace
+    const traceEvents = this.eventBuffer.filter(
+      (e) => e.trace_id === this.currentTraceId
+    );
+    const llmEvents = traceEvents.filter((e) => e.event_type === "llm_call");
+    const totalTokens = llmEvents.reduce(
+      (sum, e) => sum + (e.attributes.llm_call?.total_tokens || 0),
+      0
+    );
+    const totalCost = llmEvents.reduce(
+      (sum, e) => sum + (e.attributes.llm_call?.cost || 0),
+      0
+    );
+
+    // Calculate total latency
+    const totalLatency =
+      this.traceStartTime !== null ? Date.now() - this.traceStartTime : null;
+
+    // Add trace_end event
+    this.addEvent({
+      event_type: "trace_end",
+      span_id: this.rootSpanId,
+      parent_span_id: null,
+      attributes: {
+        trace_end: {
+          total_latency_ms: totalLatency,
+          total_tokens: totalTokens || null,
+          total_cost: totalCost || null,
+          outcome: options.outcome || "success",
+        },
+      },
+    });
+
+    // Get all events for this trace
+    const traceEventsToSend = this.eventBuffer.filter(
+      (e) => e.trace_id === this.currentTraceId
+    );
+
+    // Send events (this will flush them)
+    if (traceEventsToSend.length > 0) {
+      await this._sendEventsWithRetry(traceEventsToSend);
+      // Remove sent events from buffer
+      this.eventBuffer = this.eventBuffer.filter(
+        (e) => e.trace_id !== this.currentTraceId
+      );
+    }
+
+    // Reset trace state
+    const traceId = this.currentTraceId;
+    this.currentTraceId = null;
+    this.rootSpanId = null;
+    this.spanStack = [];
+    this.traceStartTime = null;
+
+    return traceId;
+  }
+
+  /**
+   * Convert legacy TraceData to canonical events
+   */
+  private traceDataToCanonicalEvents(trace: TraceData): CanonicalEvent[] {
+    const events: CanonicalEvent[] = [];
+    const baseEvent = {
+      tenant_id: trace.tenantId,
+      project_id: trace.projectId,
+      environment: trace.environment,
+      trace_id: trace.traceId,
+      conversation_id: trace.conversationId || null,
+      session_id: trace.sessionId || null,
+      user_id: trace.userId || null,
+    };
+
+    // Trace start event
+    events.push({
+      ...baseEvent,
+      span_id: trace.spanId,
+      parent_span_id: trace.parentSpanId || null,
+      timestamp: trace.timestamp,
+      event_type: "trace_start",
+      attributes: {
+        trace_start: {
+          metadata: trace.metadata || null,
+        },
+      },
+    });
+
+    // LLM call event (if model present)
+    if (trace.model) {
+      const llmSpanId = crypto.randomUUID();
+      events.push({
+        ...baseEvent,
+        span_id: llmSpanId,
+        parent_span_id: trace.spanId,
+        timestamp: trace.timestamp,
+        event_type: "llm_call",
+        attributes: {
+          llm_call: {
+            model: trace.model,
+            input: trace.query || null,
+            output: trace.response || null,
+            input_tokens: trace.tokensPrompt || null,
+            output_tokens: trace.tokensCompletion || null,
+            total_tokens: trace.tokensTotal || null,
+            latency_ms: trace.latencyMs,
+            time_to_first_token_ms: trace.timeToFirstTokenMs || null,
+            streaming_duration_ms: trace.streamingDurationMs || null,
+            finish_reason: trace.finishReason || null,
+            response_id: trace.responseId || null,
+            system_fingerprint: trace.systemFingerprint || null,
+            cost: null, // Cost calculation handled by backend
+          },
+        },
+      });
+    }
+
+    // Output event
+    events.push({
+      ...baseEvent,
+      span_id: crypto.randomUUID(),
+      parent_span_id: trace.spanId,
+      timestamp: trace.timestamp,
+      event_type: "output",
+      attributes: {
+        output: {
+          final_output: trace.response || null,
+          output_length: trace.responseLength || null,
+        },
+      },
+    });
+
+    // Trace end event
+    events.push({
+      ...baseEvent,
+      span_id: trace.spanId,
+      parent_span_id: trace.parentSpanId || null,
+      timestamp: trace.timestamp,
+      event_type: "trace_end",
+      attributes: {
+        trace_end: {
+          total_latency_ms: trace.latencyMs,
+          total_tokens: trace.tokensTotal || null,
+          total_cost: null, // Cost calculation handled by backend
+          outcome:
+            trace.status && trace.status >= 200 && trace.status < 300
+              ? "success"
+              : "error",
+        },
+      },
+    });
+
+    return events;
   }
 
   /**
@@ -532,34 +1073,47 @@ export class Observa {
       return;
     }
 
-    // Send events with retry logic
+    // Send events in batches (group by trace_id to send complete traces)
+    const eventsByTrace = new Map<string, CanonicalEvent[]>();
     for (const event of eventsToFlush) {
-      await this._sendTraceWithRetry(event);
+      if (!eventsByTrace.has(event.trace_id)) {
+        eventsByTrace.set(event.trace_id, []);
+      }
+      eventsByTrace.get(event.trace_id)!.push(event);
+    }
+
+    // Send each trace's events together
+    for (const [traceId, events] of eventsByTrace.entries()) {
+      await this._sendEventsWithRetry(events);
     }
   }
 
   /**
-   * Send trace with exponential backoff retry
+   * Send canonical events with exponential backoff retry
    */
-  private async _sendTraceWithRetry(
-    trace: TraceData,
+  private async _sendEventsWithRetry(
+    events: CanonicalEvent[],
     maxRetries: number = 3
   ): Promise<void> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        await this.sendTrace(trace);
+        await this.sendEvents(events);
         return; // Success
       } catch (error) {
         if (attempt === maxRetries) {
           // Final attempt failed - re-buffer for later
           console.error(
-            `[Observa] Failed to send trace after ${maxRetries + 1} attempts, re-buffering:`,
+            `[Observa] Failed to send events after ${
+              maxRetries + 1
+            } attempts, re-buffering:`,
             error
           );
-          this.eventBuffer.push(trace);
+          this.eventBuffer.push(...events);
           // Prevent buffer from growing too large
           if (this.eventBuffer.length > this.maxBufferSize * 2) {
-            this.eventBuffer.shift(); // Drop oldest event
+            // Drop oldest events
+            const toDrop = this.eventBuffer.length - this.maxBufferSize;
+            this.eventBuffer.splice(0, toDrop);
           }
           return;
         }
@@ -599,7 +1153,8 @@ export class Observa {
     const spanId = traceId; // MVP: 1 span per trace
 
     // Set up context propagation
-    const runWithContext = contextModule?.runInTraceContextAsync || 
+    const runWithContext =
+      contextModule?.runInTraceContextAsync ||
       ((ctx: any, fn: () => Promise<any>) => fn());
     const context = contextModule?.createSpanContext?.(
       traceId,
@@ -612,7 +1167,7 @@ export class Observa {
 
     // capture response headers
     const responseHeaders: Record<string, string> = {};
-    originalResponse.headers.forEach((value, key) => {
+    originalResponse.headers.forEach((value: string, key: string) => {
       responseHeaders[key] = value;
     });
 
@@ -786,19 +1341,28 @@ export class Observa {
         ...(headers !== undefined && { headers }),
 
         // Conversation tracking fields
-        ...(event.conversationId !== undefined && { conversationId: event.conversationId }),
+        ...(event.conversationId !== undefined && {
+          conversationId: event.conversationId,
+        }),
         ...(event.sessionId !== undefined && { sessionId: event.sessionId }),
         ...(event.userId !== undefined && { userId: event.userId }),
-        ...(event.messageIndex !== undefined && { messageIndex: event.messageIndex }),
-        ...(event.parentMessageId !== undefined && { parentMessageId: event.parentMessageId }),
+        ...(event.messageIndex !== undefined && {
+          messageIndex: event.messageIndex,
+        }),
+        ...(event.parentMessageId !== undefined && {
+          parentMessageId: event.parentMessageId,
+        }),
       };
 
       console.log(
-        `[Observa] Trace data prepared, calling sendTrace for ${traceId}, response length: ${fullResponse.length}`
+        `[Observa] Trace data prepared, converting to canonical events for ${traceId}, response length: ${fullResponse.length}`
       );
 
+      // Convert to canonical events
+      const canonicalEvents = this.traceDataToCanonicalEvents(traceData);
+
       // Add to buffer (will be flushed periodically or on explicit flush())
-      this.eventBuffer.push(traceData);
+      this.eventBuffer.push(...canonicalEvents);
 
       // Auto-flush if buffer is full
       if (this.eventBuffer.length >= this.maxBufferSize) {
@@ -807,17 +1371,18 @@ export class Observa {
         });
       } else {
         // Send immediately (with retry logic)
-        this._sendTraceWithRetry(traceData).catch((err) => {
-          console.error("[Observa] Failed to send trace:", err);
+        this._sendEventsWithRetry(canonicalEvents).catch((err) => {
+          console.error("[Observa] Failed to send events:", err);
         });
       }
 
       // Magic link in dev mode
       if (!this.isProduction) {
-        const traceUrl = `${this.apiUrl.replace(/\/api.*$/, "")}/traces/${traceId}`;
-        console.log(
-          `[Observa] 🕊️ Trace captured: ${traceUrl}`
-        );
+        const traceUrl = `${this.apiUrl.replace(
+          /\/api.*$/,
+          ""
+        )}/traces/${traceId}`;
+        console.log(`[Observa] 🕊️ Trace captured: ${traceUrl}`);
       }
 
       console.log(`[Observa] Trace queued for sending: ${traceId}`);
@@ -834,26 +1399,71 @@ export class Observa {
   }
 
   /**
-   * Send a single trace (internal method, use _sendTraceWithRetry for retry logic)
+   * Send canonical events to Observa backend
+   * (internal method, use _sendEventsWithRetry for retry logic)
    */
-  private async sendTrace(trace: TraceData): Promise<void> {
-    // Dev mode: show pretty logs for debugging
-    if (!this.isProduction) {
-      formatBeautifulLog(trace);
+  private async sendEvents(events: CanonicalEvent[]): Promise<void> {
+    if (events.length === 0) {
+      return;
     }
 
-    // Send to Observa backend (which forwards to Tinybird)
+    // For backward compatibility, show pretty logs in dev mode
+    // Extract first trace_id for logging
+    const traceId = events[0]?.trace_id;
+    if (!this.isProduction && traceId) {
+      // Try to reconstruct TraceData for pretty logging (backward compatibility)
+      const llmEvent = events.find((e) => e.event_type === "llm_call");
+      const outputEvent = events.find((e) => e.event_type === "output");
+      const traceEndEvent = events.find((e) => e.event_type === "trace_end");
+
+      if (llmEvent && outputEvent) {
+        const llmAttrs = llmEvent.attributes.llm_call;
+        const outputAttrs = outputEvent.attributes.output;
+        const traceData: TraceData = {
+          traceId: llmEvent.trace_id,
+          spanId: llmEvent.parent_span_id || llmEvent.span_id,
+          parentSpanId: llmEvent.parent_span_id || null,
+          timestamp: llmEvent.timestamp,
+          tenantId: llmEvent.tenant_id,
+          projectId: llmEvent.project_id,
+          environment: llmEvent.environment,
+          query: llmAttrs?.input || "",
+          response: outputAttrs?.final_output || "",
+          responseLength: outputAttrs?.output_length || 0,
+          ...(llmAttrs?.model && { model: llmAttrs.model }),
+          tokensPrompt: llmAttrs?.input_tokens ?? null,
+          tokensCompletion: llmAttrs?.output_tokens ?? null,
+          tokensTotal: llmAttrs?.total_tokens ?? null,
+          latencyMs: llmAttrs?.latency_ms || 0,
+          timeToFirstTokenMs: llmAttrs?.time_to_first_token_ms ?? null,
+          streamingDurationMs: llmAttrs?.streaming_duration_ms ?? null,
+          finishReason: llmAttrs?.finish_reason ?? null,
+          responseId: llmAttrs?.response_id ?? null,
+          systemFingerprint: llmAttrs?.system_fingerprint ?? null,
+          ...(llmEvent.conversation_id && {
+            conversationId: llmEvent.conversation_id,
+          }),
+          ...(llmEvent.session_id && { sessionId: llmEvent.session_id }),
+          ...(llmEvent.user_id && { userId: llmEvent.user_id }),
+        };
+
+        formatBeautifulLog(traceData);
+      }
+    }
+
+    // Send to Observa backend (canonical events endpoint)
     try {
       // Remove trailing slash from apiUrl if present, then add the path
       const baseUrl = this.apiUrl.replace(/\/+$/, "");
-      const url = `${baseUrl}/api/v1/traces/ingest`;
+      const url = `${baseUrl}/api/v1/events/ingest`;
 
-      // Enhanced logging for debugging (always log in production too)
-      // Single combined log to avoid Vercel truncation
+      // Enhanced logging for debugging
       console.log(
-        `[Observa] Sending trace - URL: ${url}, TraceID: ${
-          trace.traceId
-        }, Tenant: ${trace.tenantId}, Project: ${trace.projectId}, APIKey: ${
+        `[Observa] Sending ${
+          events.length
+        } canonical events - URL: ${url}, TraceID: ${traceId}, Tenant: ${
+          events[0]?.tenant_id
+        }, Project: ${events[0]?.project_id}, APIKey: ${
           this.apiKey ? `Yes(${this.apiKey.length} chars)` : "No"
         }`
       );
@@ -869,7 +1479,7 @@ export class Observa {
             Authorization: `Bearer ${this.apiKey}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(trace),
+          body: JSON.stringify(events),
           signal: controller.signal,
         });
 
@@ -893,10 +1503,18 @@ export class Observa {
             `[Observa] Backend API error: ${response.status} ${response.statusText}`,
             errorJson.error || errorText
           );
+          throw new Error(
+            `Observa API error: ${response.status} ${
+              errorJson.error?.message || errorText
+            }`
+          );
         } else {
+          const result = await response.json().catch(() => ({}));
           // Log success even in production for debugging
           console.log(
-            `✅ [Observa] Trace sent successfully - Trace ID: ${trace.traceId}`
+            `✅ [Observa] Events sent successfully - Trace ID: ${traceId}, Event count: ${
+              result.event_count || events.length
+            }`
           );
         }
       } catch (fetchError) {
@@ -908,7 +1526,7 @@ export class Observa {
       }
     } catch (error) {
       // Enhanced error logging
-      console.error("[Observa] Failed to send trace:", error);
+      console.error("[Observa] Failed to send events:", error);
       if (error instanceof Error) {
         console.error("[Observa] Error message:", error.message);
         console.error("[Observa] Error name:", error.name);
@@ -921,6 +1539,7 @@ export class Observa {
           console.error("[Observa] Error stack:", error.stack);
         }
       }
+      throw error;
     }
   }
 }
