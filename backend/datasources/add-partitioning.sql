@@ -10,3 +10,6 @@
 -- provides sufficient query performance without explicit partitioning
 
 
+
+
+

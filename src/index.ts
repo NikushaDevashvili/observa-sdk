@@ -216,7 +216,11 @@ type EventType =
   | "feedback"
   | "output"
   | "trace_start"
-  | "trace_end";
+  | "trace_end"
+  | "embedding"
+  | "vector_db_operation"
+  | "cache_operation"
+  | "agent_create";
 
 interface CanonicalEvent {
   tenant_id: string;
@@ -248,6 +252,130 @@ interface CanonicalEvent {
       response_id?: string | null;
       system_fingerprint?: string | null;
       cost?: number | null;
+      // TIER 1: OTEL Semantic Conventions
+      operation_name?: "chat" | "text_completion" | "generate_content" | string | null;
+      provider_name?: string | null;
+      response_model?: string | null;
+      // TIER 2: Sampling parameters
+      top_k?: number | null;
+      top_p?: number | null;
+      frequency_penalty?: number | null;
+      presence_penalty?: number | null;
+      stop_sequences?: string[] | null;
+      seed?: number | null;
+      temperature?: number | null;
+      max_tokens?: number | null;
+      // TIER 2: Structured cost tracking
+      input_cost?: number | null;
+      output_cost?: number | null;
+      // TIER 1: Structured message objects
+      input_messages?: Array<{
+        role: string;
+        content?: string | any;
+        parts?: Array<{ type: string; content: any }>;
+      }> | null;
+      output_messages?: Array<{
+        role: string;
+        content?: string | any;
+        parts?: Array<{ type: string; content: any }>;
+        finish_reason?: string;
+      }> | null;
+      system_instructions?: Array<{
+        type: string;
+        content: string | any;
+      }> | null;
+      // TIER 2: Server metadata
+      server_address?: string | null;
+      server_port?: number | null;
+      // TIER 2: Conversation grouping
+      conversation_id_otel?: string | null;
+      choice_count?: number | null;
+    };
+    tool_call?: {
+      tool_name: string;
+      args?: Record<string, any> | null;
+      result?: any | null;
+      result_status: "success" | "error" | "timeout";
+      latency_ms: number;
+      error_message?: string | null;
+      // TIER 2: OTEL Tool Standardization
+      operation_name?: "execute_tool" | string | null;
+      tool_type?: "function" | "extension" | "datastore" | string | null;
+      tool_description?: string | null;
+      tool_call_id?: string | null;
+      error_type?: string | null;
+      error_category?: string | null;
+    };
+    retrieval?: {
+      retrieval_context_ids?: string[] | null;
+      retrieval_context_hashes?: string[] | null;
+      k?: number | null;
+      latency_ms: number;
+      top_k?: number | null;
+      similarity_scores?: number[] | null;
+      // TIER 2: Retrieval enrichment
+      retrieval_context?: string | null;
+      embedding_model?: string | null;
+      embedding_dimensions?: number | null;
+      vector_metric?: "cosine" | "euclidean" | "dot_product" | string | null;
+      rerank_score?: number | null;
+      fusion_method?: string | null;
+      deduplication_removed_count?: number | null;
+      quality_score?: number | null;
+    };
+    error?: {
+      error_type: string;
+      error_message: string;
+      stack_trace?: string | null;
+      context?: Record<string, any> | null;
+      // TIER 2: Structured error classification
+      error_category?: string | null;
+      error_code?: string | null;
+    };
+    embedding?: {
+      model: string;
+      dimension_count?: number | null;
+      encoding_formats?: string[] | null;
+      input_tokens?: number | null;
+      output_tokens?: number | null;
+      latency_ms: number;
+      cost?: number | null;
+      input_text?: string | null;
+      input_hash?: string | null;
+      embeddings?: number[][] | null;
+      embeddings_hash?: string | null;
+      operation_name?: "embeddings" | string | null;
+      provider_name?: string | null;
+    };
+    vector_db_operation?: {
+      operation_type: "vector_search" | "index_upsert" | "delete" | string;
+      index_name?: string | null;
+      index_version?: string | null;
+      vector_dimensions?: number | null;
+      vector_metric?: "cosine" | "euclidean" | "dot_product" | string | null;
+      results_count?: number | null;
+      scores?: number[] | null;
+      latency_ms: number;
+      cost?: number | null;
+      api_version?: string | null;
+      provider_name?: string | null;
+    };
+    cache_operation?: {
+      cache_backend?: "redis" | "in_memory" | "memcached" | string | null;
+      cache_key?: string | null;
+      cache_namespace?: string | null;
+      hit_status: "hit" | "miss";
+      latency_ms: number;
+      saved_cost?: number | null;
+      ttl?: number | null;
+      eviction_info?: Record<string, any> | null;
+    };
+    agent_create?: {
+      agent_name: string;
+      agent_config?: Record<string, any> | null;
+      tools_bound?: string[] | null;
+      model_config?: Record<string, any> | null;
+      operation_name?: "create_agent" | string | null;
     };
     output?: {
       final_output?: string | null;
@@ -699,7 +827,137 @@ export class Observa {
   }
 
   /**
-   * Track a tool call
+   * Track an LLM call with full OTEL support
+   * CRITICAL: This is the primary method for tracking LLM calls with all SOTA parameters
+   */
+  trackLLMCall(options: {
+    model: string;
+    input?: string | null;
+    output?: string | null;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    totalTokens?: number | null;
+    latencyMs: number;
+    timeToFirstTokenMs?: number | null;
+    streamingDurationMs?: number | null;
+    finishReason?: string | null;
+    responseId?: string | null;
+    systemFingerprint?: string | null;
+    cost?: number | null;
+    temperature?: number | null;
+    maxTokens?: number | null;
+    // TIER 1: OTEL Semantic Conventions
+    operationName?: "chat" | "text_completion" | "generate_content" | string | null;
+    providerName?: string | null; // e.g., "openai", "anthropic", "gcp.vertex_ai"
+    responseModel?: string | null; // Actual model used vs requested
+    // TIER 2: Sampling parameters
+    topK?: number | null;
+    topP?: number | null;
+    frequencyPenalty?: number | null;
+    presencePenalty?: number | null;
+    stopSequences?: string[] | null;
+    seed?: number | null;
+    // TIER 2: Structured cost tracking
+    inputCost?: number | null;
+    outputCost?: number | null;
+    // TIER 1: Structured message objects
+    inputMessages?: Array<{
+      role: string;
+      content?: string | any;
+      parts?: Array<{ type: string; content: any }>;
+    }> | null;
+    outputMessages?: Array<{
+      role: string;
+      content?: string | any;
+      parts?: Array<{ type: string; content: any }>;
+      finish_reason?: string;
+    }> | null;
+    systemInstructions?: Array<{
+      type: string;
+      content: string | any;
+    }> | null;
+    // TIER 2: Server metadata
+    serverAddress?: string | null;
+    serverPort?: number | null;
+    // TIER 2: Conversation grouping
+    conversationIdOtel?: string | null;
+    choiceCount?: number | null;
+  }): string {
+    const spanId = crypto.randomUUID();
+
+    // Auto-infer provider from model if not provided
+    let providerName = options.providerName;
+    if (!providerName && options.model) {
+      const modelLower = options.model.toLowerCase();
+      if (modelLower.includes("gpt") || modelLower.includes("openai")) {
+        providerName = "openai";
+      } else if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
+        providerName = "anthropic";
+      } else if (modelLower.includes("gemini") || modelLower.includes("google")) {
+        providerName = "google";
+      } else if (modelLower.includes("vertex")) {
+        providerName = "gcp.vertex_ai";
+      } else if (modelLower.includes("bedrock") || modelLower.includes("aws")) {
+        providerName = "aws.bedrock";
+      }
+    }
+
+    // Auto-infer operation name if not provided
+    const operationName = options.operationName || "chat";
+
+    this.addEvent({
+      event_type: "llm_call",
+      span_id: spanId,
+      attributes: {
+        llm_call: {
+          model: options.model,
+          input: options.input || null,
+          output: options.output || null,
+          input_tokens: options.inputTokens || null,
+          output_tokens: options.outputTokens || null,
+          total_tokens: options.totalTokens || null,
+          latency_ms: options.latencyMs,
+          time_to_first_token_ms: options.timeToFirstTokenMs || null,
+          streaming_duration_ms: options.streamingDurationMs || null,
+          finish_reason: options.finishReason || null,
+          response_id: options.responseId || null,
+          system_fingerprint: options.systemFingerprint || null,
+          cost: options.cost || null,
+          temperature: options.temperature || null,
+          max_tokens: options.maxTokens || null,
+          // TIER 1: OTEL Semantic Conventions
+          operation_name: operationName,
+          provider_name: providerName || null,
+          response_model: options.responseModel || null,
+          // TIER 2: Sampling parameters
+          top_k: options.topK || null,
+          top_p: options.topP || null,
+          frequency_penalty: options.frequencyPenalty || null,
+          presence_penalty: options.presencePenalty || null,
+          stop_sequences: options.stopSequences || null,
+          seed: options.seed || null,
+          // TIER 2: Structured cost tracking
+          input_cost: options.inputCost || null,
+          output_cost: options.outputCost || null,
+          // TIER 1: Structured message objects
+          input_messages: options.inputMessages || null,
+          output_messages: options.outputMessages || null,
+          system_instructions: options.systemInstructions || null,
+          // TIER 2: Server metadata
+          server_address: options.serverAddress || null,
+          server_port: options.serverPort || null,
+          // TIER 2: Conversation grouping
+          conversation_id_otel: options.conversationIdOtel || null,
+          choice_count: options.choiceCount || null,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Track a tool call with OTEL standardization
    */
   trackToolCall(options: {
     toolName: string;
@@ -708,6 +966,13 @@ export class Observa {
     resultStatus: "success" | "error" | "timeout";
     latencyMs: number;
     errorMessage?: string;
+    // TIER 2: OTEL Tool Standardization
+    operationName?: "execute_tool" | string | null;
+    toolType?: "function" | "extension" | "datastore" | string | null;
+    toolDescription?: string | null;
+    toolCallId?: string | null;
+    errorType?: string | null;
+    errorCategory?: string | null;
   }): string {
     const spanId = crypto.randomUUID();
 
@@ -722,6 +987,13 @@ export class Observa {
           result_status: options.resultStatus,
           latency_ms: options.latencyMs,
           error_message: options.errorMessage || null,
+          // TIER 2: OTEL Tool Standardization
+          operation_name: options.operationName || "execute_tool",
+          tool_type: options.toolType || null,
+          tool_description: options.toolDescription || null,
+          tool_call_id: options.toolCallId || null,
+          error_type: options.errorType || null,
+          error_category: options.errorCategory || null,
         },
       },
     });
@@ -730,7 +1002,7 @@ export class Observa {
   }
 
   /**
-   * Track a retrieval operation
+   * Track a retrieval operation with vector metadata enrichment
    */
   trackRetrieval(options: {
     contextIds?: string[];
@@ -738,6 +1010,15 @@ export class Observa {
     k?: number;
     similarityScores?: number[];
     latencyMs: number;
+    // TIER 2: Retrieval enrichment
+    retrievalContext?: string | null;
+    embeddingModel?: string | null;
+    embeddingDimensions?: number | null;
+    vectorMetric?: "cosine" | "euclidean" | "dot_product" | string | null;
+    rerankScore?: number | null;
+    fusionMethod?: string | null;
+    deduplicationRemovedCount?: number | null;
+    qualityScore?: number | null;
   }): string {
     const spanId = crypto.randomUUID();
 
@@ -752,6 +1033,15 @@ export class Observa {
           top_k: options.k || null,
           similarity_scores: options.similarityScores || null,
           latency_ms: options.latencyMs,
+          // TIER 2: Retrieval enrichment
+          retrieval_context: options.retrievalContext || null,
+          embedding_model: options.embeddingModel || null,
+          embedding_dimensions: options.embeddingDimensions || null,
+          vector_metric: options.vectorMetric || null,
+          rerank_score: options.rerankScore || null,
+          fusion_method: options.fusionMethod || null,
+          deduplication_removed_count: options.deduplicationRemovedCount || null,
+          quality_score: options.qualityScore || null,
         },
       },
     });
@@ -760,7 +1050,7 @@ export class Observa {
   }
 
   /**
-   * Track an error with stack trace support
+   * Track an error with structured error classification
    */
   trackError(options: {
     errorType: string;
@@ -768,6 +1058,9 @@ export class Observa {
     stackTrace?: string;
     context?: Record<string, any>;
     error?: Error; // Optional Error object - will extract stack trace if provided
+    // TIER 2: Structured error classification
+    errorCategory?: string | null;
+    errorCode?: string | null;
   }): string {
     const spanId = crypto.randomUUID();
 
@@ -786,6 +1079,9 @@ export class Observa {
           error_message: options.errorMessage,
           stack_trace: stackTrace || null,
           context: options.context || null,
+          // TIER 2: Structured error classification
+          error_category: options.errorCategory || null,
+          error_code: options.errorCode || null,
         },
       },
     });
@@ -865,6 +1161,169 @@ export class Observa {
         output: {
           final_output: options.finalOutput || null,
           output_length: options.outputLength || null,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Track an embedding operation (TIER 1: Critical)
+   */
+  trackEmbedding(options: {
+    model: string;
+    dimensionCount?: number | null;
+    encodingFormats?: string[] | null;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    latencyMs: number;
+    cost?: number | null;
+    inputText?: string | null;
+    inputHash?: string | null;
+    embeddings?: number[][] | null;
+    embeddingsHash?: string | null;
+    operationName?: "embeddings" | string | null;
+    providerName?: string | null;
+  }): string {
+    const spanId = crypto.randomUUID();
+
+    // Auto-infer provider from model if not provided
+    let providerName = options.providerName;
+    if (!providerName && options.model) {
+      const modelLower = options.model.toLowerCase();
+      if (modelLower.includes("text-embedding") || modelLower.includes("openai")) {
+        providerName = "openai";
+      } else if (modelLower.includes("textembedding") || modelLower.includes("google")) {
+        providerName = "google";
+      } else if (modelLower.includes("vertex")) {
+        providerName = "gcp.vertex_ai";
+      }
+    }
+
+    this.addEvent({
+      event_type: "embedding",
+      span_id: spanId,
+      attributes: {
+        embedding: {
+          model: options.model,
+          dimension_count: options.dimensionCount || null,
+          encoding_formats: options.encodingFormats || null,
+          input_tokens: options.inputTokens || null,
+          output_tokens: options.outputTokens || null,
+          latency_ms: options.latencyMs,
+          cost: options.cost || null,
+          input_text: options.inputText || null,
+          input_hash: options.inputHash || null,
+          embeddings: options.embeddings || null,
+          embeddings_hash: options.embeddingsHash || null,
+          operation_name: options.operationName || "embeddings",
+          provider_name: providerName || null,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Track a vector database operation (TIER 3)
+   */
+  trackVectorDbOperation(options: {
+    operationType: "vector_search" | "index_upsert" | "delete" | string;
+    indexName?: string | null;
+    indexVersion?: string | null;
+    vectorDimensions?: number | null;
+    vectorMetric?: "cosine" | "euclidean" | "dot_product" | string | null;
+    resultsCount?: number | null;
+    scores?: number[] | null;
+    latencyMs: number;
+    cost?: number | null;
+    apiVersion?: string | null;
+    providerName?: string | null; // e.g., "pinecone", "weaviate", "qdrant"
+  }): string {
+    const spanId = crypto.randomUUID();
+
+    this.addEvent({
+      event_type: "vector_db_operation",
+      span_id: spanId,
+      attributes: {
+        vector_db_operation: {
+          operation_type: options.operationType,
+          index_name: options.indexName || null,
+          index_version: options.indexVersion || null,
+          vector_dimensions: options.vectorDimensions || null,
+          vector_metric: options.vectorMetric || null,
+          results_count: options.resultsCount || null,
+          scores: options.scores || null,
+          latency_ms: options.latencyMs,
+          cost: options.cost || null,
+          api_version: options.apiVersion || null,
+          provider_name: options.providerName || null,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Track a cache operation (TIER 3)
+   */
+  trackCacheOperation(options: {
+    cacheBackend?: "redis" | "in_memory" | "memcached" | string | null;
+    cacheKey?: string | null;
+    cacheNamespace?: string | null;
+    hitStatus: "hit" | "miss";
+    latencyMs: number;
+    savedCost?: number | null;
+    ttl?: number | null;
+    evictionInfo?: Record<string, any> | null;
+  }): string {
+    const spanId = crypto.randomUUID();
+
+    this.addEvent({
+      event_type: "cache_operation",
+      span_id: spanId,
+      attributes: {
+        cache_operation: {
+          cache_backend: options.cacheBackend || null,
+          cache_key: options.cacheKey || null,
+          cache_namespace: options.cacheNamespace || null,
+          hit_status: options.hitStatus,
+          latency_ms: options.latencyMs,
+          saved_cost: options.savedCost || null,
+          ttl: options.ttl || null,
+          eviction_info: options.evictionInfo || null,
+        },
+      },
+    });
+
+    return spanId;
+  }
+
+  /**
+   * Track agent creation (TIER 3)
+   */
+  trackAgentCreate(options: {
+    agentName: string;
+    agentConfig?: Record<string, any> | null;
+    toolsBound?: string[] | null;
+    modelConfig?: Record<string, any> | null;
+    operationName?: "create_agent" | string | null;
+  }): string {
+    const spanId = crypto.randomUUID();
+
+    this.addEvent({
+      event_type: "agent_create",
+      span_id: spanId,
+      attributes: {
+        agent_create: {
+          agent_name: options.agentName,
+          agent_config: options.agentConfig || null,
+          tools_bound: options.toolsBound || null,
+          model_config: options.modelConfig || null,
+          operation_name: options.operationName || "create_agent",
         },
       },
     });
@@ -998,6 +1457,23 @@ export class Observa {
     // LLM call event (if model present)
     if (trace.model) {
       const llmSpanId = crypto.randomUUID();
+      // Auto-infer provider from model
+      let providerName: string | null = null;
+      if (trace.model) {
+        const modelLower = trace.model.toLowerCase();
+        if (modelLower.includes("gpt") || modelLower.includes("openai")) {
+          providerName = "openai";
+        } else if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
+          providerName = "anthropic";
+        } else if (modelLower.includes("gemini") || modelLower.includes("google")) {
+          providerName = "google";
+        } else if (modelLower.includes("vertex")) {
+          providerName = "gcp.vertex_ai";
+        } else if (modelLower.includes("bedrock") || modelLower.includes("aws")) {
+          providerName = "aws.bedrock";
+        }
+      }
+
       events.push({
         ...baseEvent,
         span_id: llmSpanId,
@@ -1019,6 +1495,10 @@ export class Observa {
             response_id: trace.responseId || null,
             system_fingerprint: trace.systemFingerprint || null,
             cost: null, // Cost calculation handled by backend
+            // TIER 1: OTEL Semantic Conventions (auto-inferred)
+            operation_name: "chat", // Default for legacy track() method
+            provider_name: providerName,
+            // Other OTEL fields can be added via trackLLMCall() method
           },
         },
       });

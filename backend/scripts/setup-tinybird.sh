@@ -125,3 +125,6 @@ echo ""
 echo "For more details, see: tinybird-setup.md"
 
 
+
+
+

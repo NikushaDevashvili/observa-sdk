@@ -62,3 +62,6 @@ ENGINE_PARTITION_KEY ""
 3. Click "Create"
 4. Verify it's JSON format by checking "Append data" → "Events API" is clickable
 
+
+
+

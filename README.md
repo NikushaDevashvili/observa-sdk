@@ -163,9 +163,134 @@ interface ObservaInitConfig {
 
 Initialize the Observa SDK instance.
 
+### `observa.trackLLMCall(options)` ⭐ NEW - Full OTEL Support
+
+Track an LLM call with complete OTEL compliance. **This is the recommended method** for tracking LLM calls.
+
+**Parameters:**
+- `model` (required): Model name
+- `input`, `output`: Input/output text
+- `inputTokens`, `outputTokens`, `totalTokens`: Token counts
+- `latencyMs` (required): Latency in milliseconds
+- `operationName`: OTEL operation name ("chat", "text_completion", "generate_content")
+- `providerName`: Provider name ("openai", "anthropic", etc.) - auto-inferred from model if not provided
+- `responseModel`: Actual model used (vs requested)
+- `topK`, `topP`, `frequencyPenalty`, `presencePenalty`, `stopSequences`, `seed`: Sampling parameters
+- `inputCost`, `outputCost`: Structured cost tracking
+- `inputMessages`, `outputMessages`, `systemInstructions`: Structured message objects
+- `serverAddress`, `serverPort`: Server metadata
+- `conversationIdOtel`: OTEL conversation ID
+- And more... (see SDK_SOTA_IMPLEMENTATION.md for complete list)
+
+**Example:**
+```typescript
+const spanId = observa.trackLLMCall({
+  model: "gpt-4-turbo",
+  input: "What is AI?",
+  output: "AI is...",
+  inputTokens: 10,
+  outputTokens: 50,
+  latencyMs: 1200,
+  operationName: "chat",
+  providerName: "openai", // Auto-inferred if not provided
+  temperature: 0.7,
+  topP: 0.9,
+  inputCost: 0.00245,
+  outputCost: 0.01024
+});
+```
+
+### `observa.trackEmbedding(options)` ⭐ NEW
+
+Track an embedding operation with full OTEL support.
+
+**Example:**
+```typescript
+const spanId = observa.trackEmbedding({
+  model: "text-embedding-ada-002",
+  dimensionCount: 1536,
+  inputTokens: 10,
+  outputTokens: 1536,
+  latencyMs: 45,
+  cost: 0.0001
+});
+```
+
+### `observa.trackVectorDbOperation(options)` ⭐ NEW
+
+Track vector database operations (Pinecone, Weaviate, Qdrant, etc.).
+
+**Example:**
+```typescript
+const spanId = observa.trackVectorDbOperation({
+  operationType: "vector_search",
+  indexName: "documents",
+  vectorDimensions: 1536,
+  resultsCount: 10,
+  latencyMs: 30,
+  cost: 0.0005,
+  providerName: "pinecone"
+});
+```
+
+### `observa.trackCacheOperation(options)` ⭐ NEW
+
+Track cache hit/miss operations.
+
+**Example:**
+```typescript
+const spanId = observa.trackCacheOperation({
+  cacheBackend: "redis",
+  hitStatus: "hit",
+  latencyMs: 2,
+  savedCost: 0.01269
+});
+```
+
+### `observa.trackAgentCreate(options)` ⭐ NEW
+
+Track agent creation.
+
+**Example:**
+```typescript
+const spanId = observa.trackAgentCreate({
+  agentName: "Customer Support Agent",
+  toolsBound: ["web_search", "database_query"],
+  modelConfig: { model: "gpt-4-turbo", temperature: 0.7 }
+});
+```
+
+### `observa.trackToolCall(options)` - Enhanced
+
+Track a tool call with OTEL standardization.
+
+**New Parameters:**
+- `toolType`: "function" | "extension" | "datastore"
+- `toolDescription`: Tool description
+- `toolCallId`: Unique tool invocation ID
+- `errorType`, `errorCategory`: Structured error classification
+
+### `observa.trackRetrieval(options)` - Enhanced
+
+Track retrieval operations with vector metadata.
+
+**New Parameters:**
+- `embeddingModel`: Model used for embeddings
+- `embeddingDimensions`: Vector dimensions
+- `vectorMetric`: Similarity metric
+- `rerankScore`, `fusionMethod`, `qualityScore`: Quality metrics
+
+### `observa.trackError(options)` - Enhanced
+
+Track errors with structured classification.
+
+**New Parameters:**
+- `errorCategory`: Error category
+- `errorCode`: Error code
+
 ### `observa.track(event, action)`
 
-Track an AI interaction.
+Track an AI interaction (legacy method, still supported).
 
 **Parameters**:
 

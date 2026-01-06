@@ -53,3 +53,6 @@ echo ""
 echo "📊 Then check Tinybird UI to see your traces!"
 
 
+
+
+

@@ -73,3 +73,6 @@ curl -X POST "https://YOUR-ENDPOINT/v0/events?name=traces&format=ndjson" \
 
 If it doesn't return a region error, that's the correct endpoint!
 
+
+
+

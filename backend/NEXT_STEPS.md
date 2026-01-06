@@ -95,3 +95,6 @@ Once you complete these steps, you'll have a fully working observability pipelin
 SDK → Backend → Tinybird → Data Storage
 
 
+
+
+

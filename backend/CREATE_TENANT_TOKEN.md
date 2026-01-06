@@ -84,3 +84,6 @@ The backend will:
 2. Generate a JWT API key for your SDK
 3. When SDK sends traces, backend will use the scoped token to write to Tinybird
 
+
+
+

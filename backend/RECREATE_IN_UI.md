@@ -87,3 +87,6 @@ node test-sdk.js
 The key difference is ensuring the datasource is created as **JSON format**, not CSV. The UI might default to CSV when you paste column definitions, so look for any format options during creation.
 
 
+
+
+
