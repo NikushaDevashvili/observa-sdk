@@ -141,6 +141,9 @@ interface ObservaInitConfig {
   projectId?: string;
   environment?: "dev" | "prod";
 
+  // Observa backend URL (optional, defaults to https://api.observa.ai)
+  apiUrl?: string;
+
   // SDK behavior
   mode?: "development" | "production";
   sampleRate?: number; // 0..1, default: 1.0
@@ -153,6 +156,7 @@ interface ObservaInitConfig {
 - **apiKey**: Your Observa API key (JWT format recommended)
 - **tenantId** / **projectId**: Required only for legacy API keys
 - **environment**: `"dev"` or `"prod"` (defaults to `"dev"`)
+- **apiUrl**: Observa backend URL (optional, defaults to `https://api.observa.ai`)
 - **mode**: SDK mode - `"development"` logs traces to console, `"production"` sends to Observa
 - **sampleRate**: Fraction of traces to record (0.0 to 1.0)
 - **maxResponseChars**: Maximum response size to capture (prevents huge payloads)
@@ -162,6 +166,57 @@ interface ObservaInitConfig {
 ### `init(config: ObservaInitConfig)`
 
 Initialize the Observa SDK instance.
+
+**Example:**
+```typescript
+import { init } from "observa-sdk";
+
+const observa = init({
+  apiKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...", // Your JWT API key
+  apiUrl: "https://api.observa.ai", // Optional, defaults to https://api.observa.ai
+  environment: "prod", // Optional, defaults to "dev"
+  mode: "production", // Optional, "development" or "production"
+  sampleRate: 1.0, // Optional, 0.0 to 1.0, default: 1.0
+  maxResponseChars: 50000, // Optional, default: 50000
+});
+```
+
+### `observa.startTrace(options)`
+
+Start a new trace for manual trace management. Returns the trace ID.
+
+**Parameters:**
+- `options.name` (optional): Trace name
+- `options.metadata` (optional): Custom metadata object
+- `options.conversationId` (optional): Conversation identifier
+- `options.sessionId` (optional): Session identifier
+- `options.userId` (optional): User identifier
+
+**Returns**: `string` - The trace ID
+
+**Example:**
+```typescript
+const traceId = observa.startTrace({
+  name: "RAG Query",
+  conversationId: "conv-123",
+  userId: "user-456",
+  metadata: { feature: "chat", version: "2.0" }
+});
+```
+
+### `observa.endTrace(options)`
+
+End the current trace and send all buffered events. Must be called after `startTrace()`.
+
+**Parameters:**
+- `options.outcome` (optional): `"success"` | `"error"` | `"timeout"` (default: `"success"`)
+
+**Returns**: `Promise<string>` - The trace ID
+
+**Example:**
+```typescript
+await observa.endTrace({ outcome: "success" });
+```
 
 ### `observa.trackLLMCall(options)` ⭐ NEW - Full OTEL Support
 
