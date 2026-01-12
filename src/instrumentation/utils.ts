@@ -101,7 +101,7 @@ export async function* wrapStream<T>(
   stream: AsyncIterable<T>,
   onComplete: (fullData: any) => void,
   onError: (error: any) => void,
-  provider: 'openai' | 'anthropic' = 'openai'
+  provider: 'openai' | 'anthropic' | 'vercel-ai' = 'openai'
 ): AsyncIterable<T> {
   let firstTokenTime: number | null = null;
   const chunks: T[] = [];
@@ -126,6 +126,13 @@ export async function* wrapStream<T>(
         if (text && typeof text === 'string') {
           tokenCount += estimateTokens(text);
         }
+      } else if (provider === 'vercel-ai') {
+        // Vercel AI SDK stream chunks are strings
+        if (typeof chunk === 'string') {
+          tokenCount += estimateTokens(chunk);
+        } else if ((chunk as any)?.textDelta) {
+          tokenCount += estimateTokens((chunk as any).textDelta);
+        }
       }
 
       chunks.push(chunk);
@@ -133,10 +140,23 @@ export async function* wrapStream<T>(
     }
 
     // Stream completed - reconstruct full response from chunks
-    const fullResponse =
-      provider === 'openai'
-        ? reconstructOpenAIResponse(chunks)
-        : reconstructAnthropicResponse(chunks);
+    let fullResponse: any;
+    if (provider === 'openai') {
+      fullResponse = reconstructOpenAIResponse(chunks);
+    } else if (provider === 'anthropic') {
+      fullResponse = reconstructAnthropicResponse(chunks);
+    } else if (provider === 'vercel-ai') {
+      // Vercel AI SDK: chunks are strings, combine them
+      const fullText = chunks
+        .map((chunk: any) => (typeof chunk === 'string' ? chunk : chunk?.textDelta || ''))
+        .join('');
+      fullResponse = {
+        text: fullText,
+        tokenCount,
+      };
+    } else {
+      fullResponse = { chunks, tokenCount };
+    }
 
     // Call onComplete in background (don't block user)
     Promise.resolve()

@@ -10,6 +10,7 @@
 // Import instrumentation wrappers (tsup bundles everything together)
 import { observeOpenAI as observeOpenAIFn } from './instrumentation/openai.js';
 import { observeAnthropic as observeAnthropicFn } from './instrumentation/anthropic.js';
+import { observeVercelAI as observeVercelAIFn } from './instrumentation/vercel-ai.js';
 
 // Import context propagation (Node.js only)
 let contextModule: any = null;
@@ -1689,6 +1690,52 @@ export class Observa {
       // Fail gracefully - return unwrapped client
       console.error('[Observa] Failed to load Anthropic wrapper:', error);
       return client;
+    }
+  }
+
+  /**
+   * Observe Vercel AI SDK - wraps generateText and streamText functions
+   * 
+   * @param aiSdk - Vercel AI SDK module (imported from 'ai')
+   * @param options - Observation options (name, tags, userId, sessionId, redact)
+   * @returns Wrapped AI SDK with automatic tracing
+   * 
+   * @example
+   * ```typescript
+   * import { generateText, streamText } from 'ai';
+   * const observa = init({ apiKey: '...' });
+   * 
+   * const ai = observa.observeVercelAI({ generateText, streamText }, {
+   *   name: 'my-app',
+   *   redact: (data) => ({ ...data, prompt: '[REDACTED]' })
+   * });
+   * 
+   * // Use wrapped functions - automatically tracked!
+   * const result = await ai.generateText({
+   *   model: 'openai/gpt-4',
+   *   prompt: 'Hello!'
+   * });
+   * ```
+   */
+  observeVercelAI(aiSdk: {
+    generateText?: any;
+    streamText?: any;
+    [key: string]: any;
+  }, options?: {
+    name?: string;
+    tags?: string[];
+    userId?: string;
+    sessionId?: string;
+    redact?: (data: any) => any;
+  }): any {
+    try {
+      // Use static import - tsup bundles everything together
+      // This works in both ESM and CommonJS when bundled
+      return observeVercelAIFn(aiSdk, { ...options, observa: this });
+    } catch (error) {
+      // Fail gracefully - return unwrapped SDK
+      console.error('[Observa] Failed to load Vercel AI SDK wrapper:', error);
+      return aiSdk;
     }
   }
 

@@ -88,6 +88,70 @@ for await (const chunk of stream) {
 }
 ```
 
+### Auto-Capture with Anthropic
+
+Works the same way with Anthropic:
+
+```typescript
+import { init } from "observa-sdk";
+import Anthropic from "@anthropic-ai/sdk";
+
+const observa = init({
+  apiKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+});
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// Wrap with Observa (automatic tracing)
+const wrappedAnthropic = observa.observeAnthropic(anthropic, {
+  name: 'my-app',
+  userId: 'user_123',
+});
+
+// Use wrapped client - automatically tracked!
+const response = await wrappedAnthropic.messages.create({
+  model: 'claude-3-opus-20240229',
+  max_tokens: 1024,
+  messages: [{ role: 'user', content: 'Hello!' }],
+});
+```
+
+### Auto-Capture with Vercel AI SDK
+
+Vercel AI SDK is a unified SDK that works with multiple providers:
+
+```typescript
+import { init } from "observa-sdk";
+import { generateText, streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+const observa = init({
+  apiKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+});
+
+// Wrap Vercel AI SDK functions (automatic tracing)
+const ai = observa.observeVercelAI({ generateText, streamText }, {
+  name: 'my-app',
+  userId: 'user_123',
+});
+
+// Use wrapped functions - automatically tracked!
+const result = await ai.generateText({
+  model: openai('gpt-4'),
+  prompt: 'Hello!',
+});
+
+// Streaming also works automatically
+const stream = await ai.streamText({
+  model: openai('gpt-4'),
+  prompt: 'Tell me a joke',
+});
+
+for await (const chunk of stream.textStream) {
+  process.stdout.write(chunk);
+}
+```
+
 ### Legacy Manual Tracking
 
 For more control, you can still use the manual `track()` method:
@@ -288,6 +352,55 @@ const response = await wrapped.messages.create({
   max_tokens: 1024,
   messages: [{ role: 'user', content: 'Hello!' }],
 });
+```
+
+### `observa.observeVercelAI(aiSdk, options?)`
+
+Wrap Vercel AI SDK functions (`generateText`, `streamText`) with automatic tracing. Vercel AI SDK is a unified SDK that works with multiple providers (OpenAI, Anthropic, Google, etc.).
+
+**Parameters:**
+- `aiSdk` (required): Object containing Vercel AI SDK functions (e.g., `{ generateText, streamText }`)
+- `options` (optional):
+  - `name` (optional): Application/service name
+  - `tags` (optional): Array of tags
+  - `userId` (optional): User identifier
+  - `sessionId` (optional): Session identifier
+  - `redact` (optional): Function to sanitize data before sending to Observa
+
+**Returns**: Wrapped AI SDK object with the same functions (use them exactly like the original functions)
+
+**Example:**
+```typescript
+import { generateText, streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const ai = observa.observeVercelAI({ generateText, streamText }, {
+  name: 'my-app',
+  userId: 'user_123',
+  redact: (data) => {
+    // Sanitize sensitive data
+    if (data?.prompt) {
+      return { ...data, prompt: '[REDACTED]' };
+    }
+    return data;
+  }
+});
+
+// Use wrapped functions - automatically tracked!
+const result = await ai.generateText({
+  model: openai('gpt-4'),
+  prompt: 'Hello!',
+});
+
+// Streaming also works automatically
+const stream = await ai.streamText({
+  model: openai('gpt-4'),
+  prompt: 'Tell me a joke',
+});
+
+for await (const chunk of stream.textStream) {
+  process.stdout.write(chunk);
+}
 ```
 
 ### `observa.startTrace(options)`
