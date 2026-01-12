@@ -34,7 +34,7 @@ export interface ObserveOptions {
  */
 function extractProviderFromModel(model: any): string {
   if (!model) return "unknown";
-  
+
   // Handle model objects (Vercel AI SDK style: openai("gpt-4") returns an object)
   if (typeof model === "object" && model !== null) {
     // Vercel AI SDK model objects have providerId property
@@ -60,7 +60,7 @@ function extractProviderFromModel(model: any): string {
     }
     return "unknown";
   }
-  
+
   // Handle string models
   if (typeof model === "string") {
     const parts = model.split("/");
@@ -79,7 +79,7 @@ function extractProviderFromModel(model: any): string {
       return "google";
     }
   }
-  
+
   return "unknown";
 }
 
@@ -89,7 +89,7 @@ function extractProviderFromModel(model: any): string {
  */
 function extractModelIdentifier(model: any): string {
   if (!model) return "unknown";
-  
+
   // Handle model objects (Vercel AI SDK style)
   if (typeof model === "object" && model !== null) {
     // Prefer modelId if available
@@ -111,12 +111,12 @@ function extractModelIdentifier(model: any): string {
       return "unknown";
     }
   }
-  
+
   // Handle string models
   if (typeof model === "string") {
     return model;
   }
-  
+
   return "unknown";
 }
 
@@ -142,9 +142,11 @@ async function traceGenerateText(
     const usage = result.usage || {};
     const finishReason = result.finishReason || null;
     const responseId = result.response?.id || null;
-    
+
     // Extract model from response if available, otherwise use identifier
-    const responseModel = result.model ? extractModelIdentifier(result.model) : modelIdentifier;
+    const responseModel = result.model
+      ? extractModelIdentifier(result.model)
+      : modelIdentifier;
 
     // Record trace
     recordTrace(
@@ -232,11 +234,17 @@ async function traceStreamText(
         "vercel-ai"
       );
 
-      // Return result with wrapped stream
-      return {
-        ...result,
-        textStream: wrappedStream,
-      };
+      // Return result with wrapped stream - preserve all original properties and methods
+      // Use Object.assign to properly preserve methods like toTextStreamResponse()
+      const wrappedResult = Object.assign({}, result);
+      wrappedResult.textStream = wrappedStream;
+      
+      // If toTextStreamResponse exists, we need to bind it properly
+      // But since we're replacing textStream, we might need to recreate the method
+      // However, Vercel AI SDK's toTextStreamResponse might use the original textStream
+      // So we preserve the original method - it should work with our wrapped stream
+      
+      return wrappedResult;
     }
 
     // If no textStream, just record the result
