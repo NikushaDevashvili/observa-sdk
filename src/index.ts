@@ -1618,6 +1618,86 @@ export class Observa {
     await this.flush();
   }
 
+  /**
+   * Observe OpenAI client - wraps client with automatic tracing
+   * 
+   * @param client - OpenAI client instance
+   * @param options - Observation options (name, tags, userId, sessionId, redact)
+   * @returns Wrapped OpenAI client
+   * 
+   * @example
+   * ```typescript
+   * import OpenAI from 'openai';
+   * const openai = new OpenAI({ apiKey: '...' });
+   * const wrapped = observa.observeOpenAI(openai, {
+   *   name: 'my-app',
+   *   redact: (data) => ({ ...data, messages: '[REDACTED]' })
+   * });
+   * ```
+   */
+  observeOpenAI(client: any, options?: {
+    name?: string;
+    tags?: string[];
+    userId?: string;
+    sessionId?: string;
+    redact?: (data: any) => any;
+  }): any {
+    try {
+      // Lazy load to avoid circular dependencies and optional dependency issues
+      // The instrumentation modules will be bundled by tsup
+      // Use type assertion for require (Node.js global)
+      const requireFn = (globalThis as any).require || ((module: string) => {
+        throw new Error('require is not available');
+      });
+      const { observeOpenAI: observeOpenAIFn } = requireFn('./instrumentation/openai');
+      return observeOpenAIFn(client, { ...options, observa: this });
+    } catch (error) {
+      // Fail gracefully - return unwrapped client
+      console.error('[Observa] Failed to load OpenAI wrapper:', error);
+      return client;
+    }
+  }
+
+  /**
+   * Observe Anthropic client - wraps client with automatic tracing
+   * 
+   * @param client - Anthropic client instance
+   * @param options - Observation options (name, tags, userId, sessionId, redact)
+   * @returns Wrapped Anthropic client
+   * 
+   * @example
+   * ```typescript
+   * import Anthropic from '@anthropic-ai/sdk';
+   * const anthropic = new Anthropic({ apiKey: '...' });
+   * const wrapped = observa.observeAnthropic(anthropic, {
+   *   name: 'my-app',
+   *   redact: (data) => ({ ...data, messages: '[REDACTED]' })
+   * });
+   * ```
+   */
+  observeAnthropic(client: any, options?: {
+    name?: string;
+    tags?: string[];
+    userId?: string;
+    sessionId?: string;
+    redact?: (data: any) => any;
+  }): any {
+    try {
+      // Lazy load to avoid circular dependencies and optional dependency issues
+      // The instrumentation modules will be bundled by tsup
+      // Use type assertion for require (Node.js global)
+      const requireFn = (globalThis as any).require || ((module: string) => {
+        throw new Error('require is not available');
+      });
+      const { observeAnthropic: observeAnthropicFn } = requireFn('./instrumentation/anthropic');
+      return observeAnthropicFn(client, { ...options, observa: this });
+    } catch (error) {
+      // Fail gracefully - return unwrapped client
+      console.error('[Observa] Failed to load Anthropic wrapper:', error);
+      return client;
+    }
+  }
+
   async track(
     event: TrackEventInput,
     action: () => Promise<Response>,

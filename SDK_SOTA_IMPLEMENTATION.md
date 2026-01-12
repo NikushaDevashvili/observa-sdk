@@ -26,12 +26,12 @@ const spanId = observa.trackLLMCall({
   outputTokens: 50,
   totalTokens: 60,
   latencyMs: 1200,
-  
+
   // TIER 1: OTEL Semantic Conventions
   operationName: "chat", // or "text_completion", "generate_content"
   providerName: "openai", // Auto-inferred from model if not provided
   responseModel: "gpt-4-turbo-2024-04-09", // Actual model used
-  
+
   // TIER 2: Sampling parameters
   topK: 50,
   topP: 0.9,
@@ -41,55 +41,56 @@ const spanId = observa.trackLLMCall({
   seed: 42,
   temperature: 0.7,
   maxTokens: 2048,
-  
+
   // TIER 2: Structured cost tracking
   inputCost: 0.00245,
   outputCost: 0.01024,
   cost: 0.01269, // Total (or calculated from input+output)
-  
+
   // TIER 1: Structured message objects
   inputMessages: [
     {
       role: "system",
-      content: "You are a helpful assistant"
+      content: "You are a helpful assistant",
     },
     {
       role: "user",
-      content: "What is AI?"
-    }
+      content: "What is AI?",
+    },
   ],
   outputMessages: [
     {
       role: "assistant",
       content: "AI is...",
-      finish_reason: "stop"
-    }
+      finish_reason: "stop",
+    },
   ],
   systemInstructions: [
     {
       type: "system",
-      content: "You are a helpful assistant"
-    }
+      content: "You are a helpful assistant",
+    },
   ],
-  
+
   // TIER 2: Server metadata
   serverAddress: "api.openai.com",
   serverPort: 443,
-  
+
   // TIER 2: Conversation grouping
   conversationIdOtel: "conv_5j66UpCpwteGg4YSxUnt7lPY",
   choiceCount: 1,
-  
+
   // Standard fields
   timeToFirstTokenMs: 150,
   streamingDurationMs: 1050,
   finishReason: "stop",
   responseId: "chatcmpl-abc123",
-  systemFingerprint: "fp_abc123"
+  systemFingerprint: "fp_abc123",
 });
 ```
 
 **Auto-inference:**
+
 - `providerName` automatically inferred from model name if not provided
 - `operationName` defaults to "chat" if not provided
 
@@ -104,7 +105,7 @@ const spanId = observa.trackToolCall({
   result: { results: [...] },
   resultStatus: "success",
   latencyMs: 250,
-  
+
   // TIER 2: OTEL Tool Standardization
   operationName: "execute_tool", // Default
   toolType: "function", // or "extension", "datastore"
@@ -126,7 +127,7 @@ const spanId = observa.trackRetrieval({
   k: 3,
   similarityScores: [0.95, 0.87, 0.82],
   latencyMs: 126,
-  
+
   // TIER 2: Retrieval enrichment
   retrievalContext: "Full context text...",
   embeddingModel: "text-embedding-ada-002",
@@ -135,7 +136,7 @@ const spanId = observa.trackRetrieval({
   rerankScore: 0.92, // If using reranker
   fusionMethod: "reciprocal_rank_fusion", // If combining sources
   deduplicationRemovedCount: 2, // Chunks filtered
-  qualityScore: 0.88 // Overall retrieval quality
+  qualityScore: 0.88, // Overall retrieval quality
 });
 ```
 
@@ -149,10 +150,10 @@ const spanId = observa.trackError({
   errorMessage: "Request timed out after 30s",
   stackTrace: error.stack,
   context: { url: "https://api.example.com", retryCount: 3 },
-  
+
   // TIER 2: Structured error classification
   errorCategory: "network_error",
-  errorCode: "TIMEOUT_001"
+  errorCode: "TIMEOUT_001",
 });
 ```
 
@@ -169,7 +170,7 @@ const spanId = observa.trackEmbedding({
   outputTokens: 1536, // Dimensions count
   latencyMs: 45,
   cost: 0.0001,
-  
+
   // Optional
   inputText: "Text to embed",
   inputHash: "hash_abc123", // If redacted
@@ -213,7 +214,7 @@ const spanId = observa.trackCacheOperation({
   latencyMs: 2,
   savedCost: 0.01269, // Cost saved from cache hit
   ttl: 3600, // Time to live in seconds
-  evictionInfo: { reason: "lru", evictedKey: "prompt:old123" }
+  evictionInfo: { reason: "lru", evictedKey: "prompt:old123" },
 });
 ```
 
@@ -226,14 +227,14 @@ const spanId = observa.trackAgentCreate({
   agentName: "Customer Support Agent",
   agentConfig: {
     maxIterations: 10,
-    temperature: 0.7
+    temperature: 0.7,
   },
   toolsBound: ["web_search", "database_query", "email_send"],
   modelConfig: {
     model: "gpt-4-turbo",
-    temperature: 0.7
+    temperature: 0.7,
   },
-  operationName: "create_agent" // Default
+  operationName: "create_agent", // Default
 });
 ```
 
@@ -244,6 +245,7 @@ const spanId = observa.trackAgentCreate({
 ### From Legacy `track()` to `trackLLMCall()`
 
 **Before:**
+
 ```typescript
 await observa.track(
   { query: "What is AI?", model: "gpt-4" },
@@ -252,6 +254,7 @@ await observa.track(
 ```
 
 **After (Recommended):**
+
 ```typescript
 const startTime = Date.now();
 const response = await openai.chat.completions.create({
@@ -276,7 +279,9 @@ observa.trackLLMCall({
   temperature: 0.7,
   topP: 0.9,
   inputMessages: [{ role: "user", content: "What is AI?" }],
-  outputMessages: [{ role: "assistant", content: response.choices[0].message.content }],
+  outputMessages: [
+    { role: "assistant", content: response.choices[0].message.content },
+  ],
   // ... all other OTEL parameters
 });
 ```
@@ -284,6 +289,7 @@ observa.trackLLMCall({
 ### Updating Existing Code
 
 **1. Update `trackToolCall()` calls:**
+
 ```typescript
 // Before
 observa.trackToolCall({
@@ -308,13 +314,14 @@ observa.trackToolCall({
 ```
 
 **2. Update `trackRetrieval()` calls:**
+
 ```typescript
 // Before
 observa.trackRetrieval({
   contextIds: ["doc-123"],
   k: 3,
   similarityScores: [0.95],
-  latencyMs: 126
+  latencyMs: 126,
 });
 
 // After (add vector metadata)
@@ -325,17 +332,18 @@ observa.trackRetrieval({
   latencyMs: 126,
   embeddingModel: "text-embedding-ada-002",
   embeddingDimensions: 1536,
-  vectorMetric: "cosine"
+  vectorMetric: "cosine",
 });
 ```
 
 **3. Add embedding tracking:**
+
 ```typescript
 // NEW: Track embedding operations
 const embeddingStart = Date.now();
 const embeddings = await openai.embeddings.create({
   model: "text-embedding-ada-002",
-  input: "Text to embed"
+  input: "Text to embed",
 });
 
 observa.trackEmbedding({
@@ -345,7 +353,7 @@ observa.trackEmbedding({
   outputTokens: 1536,
   latencyMs: Date.now() - embeddingStart,
   cost: 0.0001,
-  inputText: "Text to embed"
+  inputText: "Text to embed",
 });
 ```
 
@@ -363,7 +371,7 @@ const observa = init({
 // Start trace
 const traceId = observa.startTrace({
   name: "RAG Query",
-  conversationId: "conv_123"
+  conversationId: "conv_123",
 });
 
 try {
@@ -375,7 +383,7 @@ try {
     outputTokens: 1536,
     latencyMs: 45,
     cost: 0.0001,
-    inputText: userQuery
+    inputText: userQuery,
   });
 
   // 2. Track vector DB search
@@ -388,7 +396,7 @@ try {
     scores: [0.95, 0.87, 0.82, 0.78, 0.75],
     latencyMs: 30,
     cost: 0.0005,
-    providerName: "pinecone"
+    providerName: "pinecone",
   });
 
   // 3. Track retrieval
@@ -400,7 +408,7 @@ try {
     embeddingModel: "text-embedding-ada-002",
     embeddingDimensions: 1536,
     vectorMetric: "cosine",
-    qualityScore: 0.88
+    qualityScore: 0.88,
   });
 
   // 4. Track LLM call with full OTEL
@@ -421,20 +429,20 @@ try {
     outputCost: 0.01024,
     inputMessages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: userQuery }
+      { role: "user", content: userQuery },
     ],
     outputMessages: [
-      { role: "assistant", content: response, finish_reason: "stop" }
+      { role: "assistant", content: response, finish_reason: "stop" },
     ],
     serverAddress: "api.openai.com",
     serverPort: 443,
-    conversationIdOtel: "conv_123"
+    conversationIdOtel: "conv_123",
   });
 
   // 5. Track output
   observa.trackOutput({
     finalOutput: response,
-    outputLength: response.length
+    outputLength: response.length,
   });
 
   await observa.endTrace({ outcome: "success" });
@@ -444,7 +452,7 @@ try {
     errorMessage: error.message,
     stackTrace: error.stack,
     errorCategory: "application_error",
-    errorCode: "EXEC_001"
+    errorCode: "EXEC_001",
   });
   await observa.endTrace({ outcome: "error" });
 }
@@ -456,62 +464,63 @@ try {
 
 ### LLM Call Parameters ✅
 
-| Parameter | Method | Auto-Inferred | Required |
-|-----------|--------|---------------|----------|
-| `operationName` | `trackLLMCall()` | No (defaults to "chat") | No |
-| `providerName` | `trackLLMCall()` | ✅ Yes (from model) | No |
-| `responseModel` | `trackLLMCall()` | No | No |
-| `topK` | `trackLLMCall()` | No | No |
-| `topP` | `trackLLMCall()` | No | No |
-| `frequencyPenalty` | `trackLLMCall()` | No | No |
-| `presencePenalty` | `trackLLMCall()` | No | No |
-| `stopSequences` | `trackLLMCall()` | No | No |
-| `seed` | `trackLLMCall()` | No | No |
-| `inputCost` | `trackLLMCall()` | No | No |
-| `outputCost` | `trackLLMCall()` | No | No |
-| `inputMessages` | `trackLLMCall()` | No | No |
-| `outputMessages` | `trackLLMCall()` | No | No |
-| `systemInstructions` | `trackLLMCall()` | No | No |
-| `serverAddress` | `trackLLMCall()` | No | No |
-| `serverPort` | `trackLLMCall()` | No | No |
-| `conversationIdOtel` | `trackLLMCall()` | No | No |
-| `choiceCount` | `trackLLMCall()` | No | No |
+| Parameter            | Method           | Auto-Inferred           | Required |
+| -------------------- | ---------------- | ----------------------- | -------- |
+| `operationName`      | `trackLLMCall()` | No (defaults to "chat") | No       |
+| `providerName`       | `trackLLMCall()` | ✅ Yes (from model)     | No       |
+| `responseModel`      | `trackLLMCall()` | No                      | No       |
+| `topK`               | `trackLLMCall()` | No                      | No       |
+| `topP`               | `trackLLMCall()` | No                      | No       |
+| `frequencyPenalty`   | `trackLLMCall()` | No                      | No       |
+| `presencePenalty`    | `trackLLMCall()` | No                      | No       |
+| `stopSequences`      | `trackLLMCall()` | No                      | No       |
+| `seed`               | `trackLLMCall()` | No                      | No       |
+| `inputCost`          | `trackLLMCall()` | No                      | No       |
+| `outputCost`         | `trackLLMCall()` | No                      | No       |
+| `inputMessages`      | `trackLLMCall()` | No                      | No       |
+| `outputMessages`     | `trackLLMCall()` | No                      | No       |
+| `systemInstructions` | `trackLLMCall()` | No                      | No       |
+| `serverAddress`      | `trackLLMCall()` | No                      | No       |
+| `serverPort`         | `trackLLMCall()` | No                      | No       |
+| `conversationIdOtel` | `trackLLMCall()` | No                      | No       |
+| `choiceCount`        | `trackLLMCall()` | No                      | No       |
 
 ### Tool Call Parameters ✅
 
-| Parameter | Method | Auto-Inferred | Required |
-|-----------|--------|---------------|----------|
-| `operationName` | `trackToolCall()` | ✅ Yes (defaults to "execute_tool") | No |
-| `toolType` | `trackToolCall()` | No | No |
-| `toolDescription` | `trackToolCall()` | No | No |
-| `toolCallId` | `trackToolCall()` | No | No |
-| `errorType` | `trackToolCall()` | No | No |
-| `errorCategory` | `trackToolCall()` | No | No |
+| Parameter         | Method            | Auto-Inferred                       | Required |
+| ----------------- | ----------------- | ----------------------------------- | -------- |
+| `operationName`   | `trackToolCall()` | ✅ Yes (defaults to "execute_tool") | No       |
+| `toolType`        | `trackToolCall()` | No                                  | No       |
+| `toolDescription` | `trackToolCall()` | No                                  | No       |
+| `toolCallId`      | `trackToolCall()` | No                                  | No       |
+| `errorType`       | `trackToolCall()` | No                                  | No       |
+| `errorCategory`   | `trackToolCall()` | No                                  | No       |
 
 ### Retrieval Parameters ✅
 
-| Parameter | Method | Auto-Inferred | Required |
-|-----------|--------|---------------|----------|
-| `embeddingModel` | `trackRetrieval()` | No | No |
-| `embeddingDimensions` | `trackRetrieval()` | No | No |
-| `vectorMetric` | `trackRetrieval()` | No | No |
-| `rerankScore` | `trackRetrieval()` | No | No |
-| `fusionMethod` | `trackRetrieval()` | No | No |
-| `deduplicationRemovedCount` | `trackRetrieval()` | No | No |
-| `qualityScore` | `trackRetrieval()` | No | No |
+| Parameter                   | Method             | Auto-Inferred | Required |
+| --------------------------- | ------------------ | ------------- | -------- |
+| `embeddingModel`            | `trackRetrieval()` | No            | No       |
+| `embeddingDimensions`       | `trackRetrieval()` | No            | No       |
+| `vectorMetric`              | `trackRetrieval()` | No            | No       |
+| `rerankScore`               | `trackRetrieval()` | No            | No       |
+| `fusionMethod`              | `trackRetrieval()` | No            | No       |
+| `deduplicationRemovedCount` | `trackRetrieval()` | No            | No       |
+| `qualityScore`              | `trackRetrieval()` | No            | No       |
 
 ### Error Parameters ✅
 
-| Parameter | Method | Auto-Inferred | Required |
-|-----------|--------|---------------|----------|
-| `errorCategory` | `trackError()` | No | No |
-| `errorCode` | `trackError()` | No | No |
+| Parameter       | Method         | Auto-Inferred | Required |
+| --------------- | -------------- | ------------- | -------- |
+| `errorCategory` | `trackError()` | No            | No       |
+| `errorCode`     | `trackError()` | No            | No       |
 
 ---
 
 ## Backward Compatibility
 
 ✅ **All changes are backward compatible:**
+
 - Existing `trackToolCall()`, `trackRetrieval()`, `trackError()` calls continue to work
 - New parameters are optional
 - Legacy `track()` method still works (with auto-inferred provider)
@@ -529,7 +538,7 @@ const embeddingId = observa.trackEmbedding({
   model: "text-embedding-ada-002",
   dimensionCount: 1536,
   latencyMs: 45,
-  cost: 0.0001
+  cost: 0.0001,
 });
 
 // Test vector DB
@@ -537,20 +546,20 @@ const vectorDbId = observa.trackVectorDbOperation({
   operationType: "vector_search",
   latencyMs: 30,
   cost: 0.0005,
-  providerName: "pinecone"
+  providerName: "pinecone",
 });
 
 // Test cache
 const cacheId = observa.trackCacheOperation({
   hitStatus: "hit",
   latencyMs: 2,
-  savedCost: 0.01269
+  savedCost: 0.01269,
 });
 
 // Test agent create
 const agentId = observa.trackAgentCreate({
   agentName: "Test Agent",
-  toolsBound: ["tool1", "tool2"]
+  toolsBound: ["tool1", "tool2"],
 });
 ```
 

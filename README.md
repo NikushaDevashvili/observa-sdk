@@ -41,18 +41,58 @@ const observa = init({
 
 ## Quick Start
 
-### JWT-based API Key (Recommended)
+### Auto-Capture with OpenAI (Recommended)
 
-After signing up, you'll receive a JWT-formatted API key that automatically encodes your tenant and project context:
+The easiest way to track LLM calls is using the `observeOpenAI()` wrapper - it automatically captures 90%+ of your LLM interactions:
 
 ```typescript
 import { init } from "observa-sdk";
+import OpenAI from "openai";
 
-// Initialize with JWT API key from signup (automatically extracts tenant/project context)
+// Initialize Observa
 const observa = init({
   apiKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...", // Your API key from signup
 });
 
+// Initialize OpenAI client
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Wrap with Observa (automatic tracing)
+const wrappedOpenAI = observa.observeOpenAI(openai, {
+  name: 'my-app',
+  userId: 'user_123',
+  redact: (data) => {
+    // Optional: Scrub sensitive data before sending to Observa
+    if (data?.messages) {
+      return { ...data, messages: '[REDACTED]' };
+    }
+    return data;
+  }
+});
+
+// Use wrapped client - automatically tracked!
+const response = await wrappedOpenAI.chat.completions.create({
+  model: 'gpt-4',
+  messages: [{ role: 'user', content: 'Hello!' }],
+});
+
+// Streaming also works automatically
+const stream = await wrappedOpenAI.chat.completions.create({
+  model: 'gpt-4',
+  messages: [{ role: 'user', content: 'Hello!' }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content || '');
+}
+```
+
+### Legacy Manual Tracking
+
+For more control, you can still use the manual `track()` method:
+
+```typescript
 // Track AI interactions with simple wrapping
 const response = await observa.track({ query: "What is the weather?" }, () =>
   fetch("https://api.openai.com/v1/chat/completions", {
@@ -67,17 +107,25 @@ const response = await observa.track({ query: "What is the weather?" }, () =>
 );
 ```
 
-### Legacy API Key Format
+### Manual Tracking (Advanced)
+
+For more control over what gets tracked, use the manual tracking methods:
 
 ```typescript
-// For backward compatibility, you can still provide tenantId/projectId explicitly
-const observa = init({
-  apiKey: "your-api-key",
-  tenantId: "acme_corp",
-  projectId: "prod_app",
-  environment: "prod", // optional, defaults to "dev"
+// Use trackLLMCall for fine-grained control
+const spanId = observa.trackLLMCall({
+  model: 'gpt-4',
+  input: 'Hello!',
+  output: 'Hi there!',
+  inputTokens: 10,
+  outputTokens: 5,
+  latencyMs: 1200,
+  operationName: 'chat',
+  providerName: 'openai',
 });
 ```
+
+See the [API Reference](#api-reference) section for all available methods.
 
 ## Multi-Tenant Architecture
 
@@ -178,6 +226,67 @@ const observa = init({
   mode: "production", // Optional, "development" or "production"
   sampleRate: 1.0, // Optional, 0.0 to 1.0, default: 1.0
   maxResponseChars: 50000, // Optional, default: 50000
+});
+```
+
+### `observa.observeOpenAI(client, options?)`
+
+Wrap an OpenAI client with automatic tracing. This is the **recommended** way to track LLM calls.
+
+**Parameters:**
+- `client` (required): OpenAI client instance
+- `options` (optional):
+  - `name` (optional): Application/service name
+  - `tags` (optional): Array of tags
+  - `userId` (optional): User identifier
+  - `sessionId` (optional): Session identifier
+  - `redact` (optional): Function to sanitize data before sending to Observa
+
+**Returns**: Wrapped OpenAI client (use it exactly like the original client)
+
+**Example:**
+```typescript
+import OpenAI from 'openai';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const wrapped = observa.observeOpenAI(openai, {
+  name: 'my-app',
+  userId: 'user_123',
+  redact: (data) => {
+    // Sanitize sensitive data
+    if (data?.messages) {
+      return { ...data, messages: '[REDACTED]' };
+    }
+    return data;
+  }
+});
+
+// Use wrapped client - automatically tracked!
+const response = await wrapped.chat.completions.create({
+  model: 'gpt-4',
+  messages: [{ role: 'user', content: 'Hello!' }],
+});
+```
+
+### `observa.observeAnthropic(client, options?)`
+
+Wrap an Anthropic client with automatic tracing. Same API as `observeOpenAI()`.
+
+**Example:**
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const wrapped = observa.observeAnthropic(anthropic, {
+  name: 'my-app',
+  redact: (data) => ({ ...data, messages: '[REDACTED]' })
+});
+
+// Use wrapped client - automatically tracked!
+const response = await wrapped.messages.create({
+  model: 'claude-3-opus-20240229',
+  max_tokens: 1024,
+  messages: [{ role: 'user', content: 'Hello!' }],
 });
 ```
 

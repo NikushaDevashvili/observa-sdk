@@ -74,3 +74,4 @@ If CREATE TABLE doesn't work, try just the column list in parentheses:
 
 
 
+
