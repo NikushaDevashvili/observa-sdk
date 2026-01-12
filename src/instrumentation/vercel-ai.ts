@@ -235,18 +235,24 @@ async function traceStreamText(
       );
 
       // Return result with wrapped stream - preserve all original properties and methods
-      // Use Object.assign to properly preserve methods like toTextStreamResponse()
       // Use Object.create to preserve prototype chain (for methods like toTextStreamResponse)
       // Then copy all properties with Object.assign
       const wrappedResult = Object.create(Object.getPrototypeOf(result));
       Object.assign(wrappedResult, result);
-      wrappedResult.textStream = wrappedStream;
       
+      // textStream is a getter-only property, so we need to use Object.defineProperty to override it
+      Object.defineProperty(wrappedResult, 'textStream', {
+        value: wrappedStream,
+        writable: true,
+        enumerable: true,
+        configurable: true
+      });
+
       // If toTextStreamResponse exists, we need to bind it properly
       // But since we're replacing textStream, we might need to recreate the method
       // However, Vercel AI SDK's toTextStreamResponse might use the original textStream
       // So we preserve the original method - it should work with our wrapped stream
-      
+
       return wrappedResult;
     }
 
