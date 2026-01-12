@@ -1,17 +1,17 @@
 /**
  * Vercel AI SDK Wrapper
- * 
+ *
  * Wraps Vercel AI SDK functions (generateText, streamText, etc.) with automatic tracing.
  * Vercel AI SDK is a unified SDK that works with multiple providers (OpenAI, Anthropic, Google, etc.)
- * 
+ *
  * Uses function wrapping pattern (not Proxy) since Vercel AI SDK exports functions, not classes.
  * Handles streaming with proper teeing (preserves TTFT).
  * Includes PII redaction hooks.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { wrapStream } from './utils';
-import { getTraceContext, waitUntil } from '../context';
+import { wrapStream } from "./utils";
+import { getTraceContext, waitUntil } from "../context";
 
 // Type for Vercel AI SDK functions (avoid direct import to handle optional dependency)
 type GenerateTextFn = any;
@@ -32,23 +32,23 @@ export interface ObserveOptions {
  * Extract provider name from model string (e.g., "openai/gpt-4" -> "openai")
  */
 function extractProviderFromModel(model: string): string {
-  if (!model) return 'unknown';
-  const parts = model.split('/');
+  if (!model) return "unknown";
+  const parts = model.split("/");
   if (parts.length > 1) {
     return parts[0].toLowerCase();
   }
   // Fallback: infer from model name
   const modelLower = model.toLowerCase();
-  if (modelLower.includes('gpt') || modelLower.includes('openai')) {
-    return 'openai';
+  if (modelLower.includes("gpt") || modelLower.includes("openai")) {
+    return "openai";
   }
-  if (modelLower.includes('claude') || modelLower.includes('anthropic')) {
-    return 'anthropic';
+  if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
+    return "anthropic";
   }
-  if (modelLower.includes('gemini') || modelLower.includes('google')) {
-    return 'google';
+  if (modelLower.includes("gemini") || modelLower.includes("google")) {
+    return "google";
   }
-  return 'unknown';
+  return "unknown";
 }
 
 /**
@@ -61,14 +61,14 @@ async function traceGenerateText(
 ) {
   const startTime = Date.now();
   const requestParams = args[0] || {};
-  const model = requestParams.model || 'unknown';
+  const model = requestParams.model || "unknown";
   const provider = extractProviderFromModel(model);
 
   try {
     const result = await originalFn(...args);
-    
+
     // Extract response data
-    const responseText = result.text || '';
+    const responseText = result.text || "";
     const usage = result.usage || {};
     const finishReason = result.finishReason || null;
     const responseId = result.response?.id || null;
@@ -119,7 +119,7 @@ async function traceStreamText(
 ) {
   const startTime = Date.now();
   const requestParams = args[0] || {};
-  const model = requestParams.model || 'unknown';
+  const model = requestParams.model || "unknown";
   const provider = extractProviderFromModel(model);
 
   try {
@@ -145,16 +145,17 @@ async function traceStreamText(
             provider
           );
         },
-        (err) => recordError(
-          {
-            model,
-            prompt: requestParams.prompt || requestParams.messages || null,
-          },
-          err,
-          startTime,
-          options
-        ),
-        'vercel-ai'
+        (err) =>
+          recordError(
+            {
+              model,
+              prompt: requestParams.prompt || requestParams.messages || null,
+            },
+            err,
+            startTime,
+            options
+          ),
+        "vercel-ai"
       );
 
       // Return result with wrapped stream
@@ -207,7 +208,7 @@ function recordTrace(
   provider?: string
 ) {
   const duration = Date.now() - start;
-  
+
   try {
     const sanitizedReq = opts?.redact ? opts.redact(req) : req;
     const sanitizedRes = opts?.redact ? opts.redact(res) : req;
@@ -216,14 +217,15 @@ function recordTrace(
       // Extract input text from prompt or messages
       let inputText: string | null = null;
       if (sanitizedReq.prompt) {
-        inputText = typeof sanitizedReq.prompt === 'string' 
-          ? sanitizedReq.prompt 
-          : JSON.stringify(sanitizedReq.prompt);
+        inputText =
+          typeof sanitizedReq.prompt === "string"
+            ? sanitizedReq.prompt
+            : JSON.stringify(sanitizedReq.prompt);
       } else if (sanitizedReq.messages) {
         inputText = sanitizedReq.messages
-          .map((m: any) => m.content || m.text || '')
+          .map((m: any) => m.content || m.text || "")
           .filter(Boolean)
-          .join('\n');
+          .join("\n");
       }
 
       // Extract output text
@@ -236,7 +238,7 @@ function recordTrace(
       const totalTokens = usage.totalTokens || null;
 
       opts.observa.trackLLMCall({
-        model: sanitizedReq.model || sanitizedRes.model || 'unknown',
+        model: sanitizedReq.model || sanitizedRes.model || "unknown",
         input: inputText,
         output: outputText,
         inputMessages: sanitizedReq.messages || null,
@@ -249,32 +251,37 @@ function recordTrace(
         streamingDurationMs: streamingDuration || null,
         finishReason: sanitizedRes.finishReason || null,
         responseId: sanitizedRes.responseId || sanitizedRes.id || null,
-        operationName: 'generate_text',
-        providerName: provider || 'vercel-ai',
+        operationName: "generate_text",
+        providerName: provider || "vercel-ai",
         responseModel: sanitizedRes.model || sanitizedReq.model || null,
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
       });
     }
   } catch (e) {
-    console.error('[Observa] Failed to record trace', e);
+    console.error("[Observa] Failed to record trace", e);
   }
 }
 
 /**
  * Record error to Observa backend
  */
-function recordError(req: any, error: any, start: number, opts?: ObserveOptions) {
+function recordError(
+  req: any,
+  error: any,
+  start: number,
+  opts?: ObserveOptions
+) {
   try {
-    console.error('[Observa] ⚠️ Error Captured:', error.message);
+    console.error("[Observa] ⚠️ Error Captured:", error.message);
     const sanitizedReq = opts?.redact ? opts.redact(req) : req;
     if (opts?.observa) {
       opts.observa.trackError({
-        errorType: error.name || 'UnknownError',
-        errorMessage: error.message || 'An unknown error occurred',
+        errorType: error.name || "UnknownError",
+        errorMessage: error.message || "An unknown error occurred",
         stackTrace: error.stack,
         context: { request: sanitizedReq },
-        errorCategory: 'llm_error',
+        errorCategory: "llm_error",
       });
     }
   } catch (e) {
@@ -284,21 +291,21 @@ function recordError(req: any, error: any, start: number, opts?: ObserveOptions)
 
 /**
  * Observe Vercel AI SDK - wraps generateText and streamText functions
- * 
+ *
  * @param aiSdk - Vercel AI SDK module (imported from 'ai')
  * @param options - Observation options (name, tags, userId, sessionId, redact)
  * @returns Wrapped AI SDK with automatic tracing
- * 
+ *
  * @example
  * ```typescript
  * import { generateText, streamText } from 'ai';
  * import { observeVercelAI } from 'observa-sdk/instrumentation';
- * 
+ *
  * const ai = observeVercelAI({ generateText, streamText }, {
  *   name: 'my-app',
  *   redact: (data) => ({ ...data, prompt: '[REDACTED]' })
  * });
- * 
+ *
  * // Use wrapped functions - automatically tracked!
  * const result = await ai.generateText({
  *   model: 'openai/gpt-4',
@@ -322,14 +329,14 @@ export function observeVercelAI(
     const wrapped: any = { ...aiSdk };
 
     // Wrap generateText if available
-    if (aiSdk.generateText && typeof aiSdk.generateText === 'function') {
+    if (aiSdk.generateText && typeof aiSdk.generateText === "function") {
       wrapped.generateText = async function (...args: any[]) {
         return traceGenerateText(aiSdk.generateText.bind(aiSdk), args, options);
       };
     }
 
     // Wrap streamText if available
-    if (aiSdk.streamText && typeof aiSdk.streamText === 'function') {
+    if (aiSdk.streamText && typeof aiSdk.streamText === "function") {
       wrapped.streamText = async function (...args: any[]) {
         return traceStreamText(aiSdk.streamText.bind(aiSdk), args, options);
       };
@@ -339,7 +346,7 @@ export function observeVercelAI(
     return wrapped;
   } catch (error) {
     // Fail gracefully - return unwrapped SDK
-    console.error('[Observa] Failed to wrap Vercel AI SDK:', error);
+    console.error("[Observa] Failed to wrap Vercel AI SDK:", error);
     return aiSdk;
   }
 }
