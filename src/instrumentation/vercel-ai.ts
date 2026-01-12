@@ -236,7 +236,10 @@ async function traceStreamText(
 
       // Return result with wrapped stream - preserve all original properties and methods
       // Use Object.assign to properly preserve methods like toTextStreamResponse()
-      const wrappedResult = Object.assign({}, result);
+      // Use Object.create to preserve prototype chain (for methods like toTextStreamResponse)
+      // Then copy all properties with Object.assign
+      const wrappedResult = Object.create(Object.getPrototypeOf(result));
+      Object.assign(wrappedResult, result);
       wrappedResult.textStream = wrappedStream;
       
       // If toTextStreamResponse exists, we need to bind it properly
