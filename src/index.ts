@@ -7,6 +7,10 @@
 // - Sends events to Tinybird Events API in NDJSON
 // ------------------------------------------------------------
 
+// Import instrumentation wrappers (tsup bundles everything together)
+import { observeOpenAI as observeOpenAIFn } from './instrumentation/openai.js';
+import { observeAnthropic as observeAnthropicFn } from './instrumentation/anthropic.js';
+
 // Import context propagation (Node.js only)
 let contextModule: any = null;
 try {
@@ -1643,13 +1647,8 @@ export class Observa {
     redact?: (data: any) => any;
   }): any {
     try {
-      // Lazy load to avoid circular dependencies and optional dependency issues
-      // The instrumentation modules will be bundled by tsup
-      // Use type assertion for require (Node.js global)
-      const requireFn = (globalThis as any).require || ((module: string) => {
-        throw new Error('require is not available');
-      });
-      const { observeOpenAI: observeOpenAIFn } = requireFn('./instrumentation/openai');
+      // Use static import - tsup bundles everything together
+      // This works in both ESM and CommonJS when bundled
       return observeOpenAIFn(client, { ...options, observa: this });
     } catch (error) {
       // Fail gracefully - return unwrapped client
@@ -1683,13 +1682,8 @@ export class Observa {
     redact?: (data: any) => any;
   }): any {
     try {
-      // Lazy load to avoid circular dependencies and optional dependency issues
-      // The instrumentation modules will be bundled by tsup
-      // Use type assertion for require (Node.js global)
-      const requireFn = (globalThis as any).require || ((module: string) => {
-        throw new Error('require is not available');
-      });
-      const { observeAnthropic: observeAnthropicFn } = requireFn('./instrumentation/anthropic');
+      // Use static import - tsup bundles everything together
+      // This works in both ESM and CommonJS when bundled
       return observeAnthropicFn(client, { ...options, observa: this });
     } catch (error) {
       // Fail gracefully - return unwrapped client
