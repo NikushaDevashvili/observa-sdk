@@ -29,25 +29,94 @@ export interface ObserveOptions {
 }
 
 /**
- * Extract provider name from model string (e.g., "openai/gpt-4" -> "openai")
+ * Extract provider name from model (string or object)
+ * Handles both string models (e.g., "openai/gpt-4") and Vercel AI SDK model objects
  */
-function extractProviderFromModel(model: string): string {
+function extractProviderFromModel(model: any): string {
   if (!model) return "unknown";
-  const parts = model.split("/");
-  if (parts.length > 1) {
-    return parts[0].toLowerCase();
+  
+  // Handle model objects (Vercel AI SDK style: openai("gpt-4") returns an object)
+  if (typeof model === "object" && model !== null) {
+    // Vercel AI SDK model objects have providerId property
+    if (model.providerId) {
+      return model.providerId.toLowerCase();
+    }
+    // Fallback: check for provider property
+    if (model.provider) {
+      return String(model.provider).toLowerCase();
+    }
+    // Try to infer from modelId
+    if (model.modelId) {
+      const modelId = String(model.modelId).toLowerCase();
+      if (modelId.includes("gpt") || modelId.includes("openai")) {
+        return "openai";
+      }
+      if (modelId.includes("claude") || modelId.includes("anthropic")) {
+        return "anthropic";
+      }
+      if (modelId.includes("gemini") || modelId.includes("google")) {
+        return "google";
+      }
+    }
+    return "unknown";
   }
-  // Fallback: infer from model name
-  const modelLower = model.toLowerCase();
-  if (modelLower.includes("gpt") || modelLower.includes("openai")) {
-    return "openai";
+  
+  // Handle string models
+  if (typeof model === "string") {
+    const parts = model.split("/");
+    if (parts.length > 1) {
+      return parts[0].toLowerCase();
+    }
+    // Fallback: infer from model name
+    const modelLower = model.toLowerCase();
+    if (modelLower.includes("gpt") || modelLower.includes("openai")) {
+      return "openai";
+    }
+    if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
+      return "anthropic";
+    }
+    if (modelLower.includes("gemini") || modelLower.includes("google")) {
+      return "google";
+    }
   }
-  if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
-    return "anthropic";
+  
+  return "unknown";
+}
+
+/**
+ * Extract model identifier string from model (string or object)
+ * Returns a string representation suitable for tracking
+ */
+function extractModelIdentifier(model: any): string {
+  if (!model) return "unknown";
+  
+  // Handle model objects (Vercel AI SDK style)
+  if (typeof model === "object" && model !== null) {
+    // Prefer modelId if available
+    if (model.modelId) {
+      return String(model.modelId);
+    }
+    // Fallback: construct from providerId + modelId if both exist
+    if (model.providerId && model.modelId) {
+      return `${model.providerId}/${model.modelId}`;
+    }
+    // Fallback: use providerId if that's all we have
+    if (model.providerId) {
+      return String(model.providerId);
+    }
+    // Last resort: try to stringify (may not be useful)
+    try {
+      return JSON.stringify(model);
+    } catch {
+      return "unknown";
+    }
   }
-  if (modelLower.includes("gemini") || modelLower.includes("google")) {
-    return "google";
+  
+  // Handle string models
+  if (typeof model === "string") {
+    return model;
   }
+  
   return "unknown";
 }
 
@@ -63,6 +132,7 @@ async function traceGenerateText(
   const requestParams = args[0] || {};
   const model = requestParams.model || "unknown";
   const provider = extractProviderFromModel(model);
+  const modelIdentifier = extractModelIdentifier(model);
 
   try {
     const result = await originalFn(...args);
@@ -72,11 +142,14 @@ async function traceGenerateText(
     const usage = result.usage || {};
     const finishReason = result.finishReason || null;
     const responseId = result.response?.id || null;
+    
+    // Extract model from response if available, otherwise use identifier
+    const responseModel = result.model ? extractModelIdentifier(result.model) : modelIdentifier;
 
     // Record trace
     recordTrace(
       {
-        model,
+        model: modelIdentifier,
         prompt: requestParams.prompt || requestParams.messages || null,
         messages: requestParams.messages || null,
       },
@@ -85,7 +158,7 @@ async function traceGenerateText(
         usage,
         finishReason,
         responseId,
-        model: result.model || model,
+        model: responseModel,
       },
       startTime,
       options,
@@ -98,7 +171,7 @@ async function traceGenerateText(
   } catch (error) {
     recordError(
       {
-        model,
+        model: modelIdentifier,
         prompt: requestParams.prompt || requestParams.messages || null,
       },
       error,
@@ -121,6 +194,7 @@ async function traceStreamText(
   const requestParams = args[0] || {};
   const model = requestParams.model || "unknown";
   const provider = extractProviderFromModel(model);
+  const modelIdentifier = extractModelIdentifier(model);
 
   try {
     const result = await originalFn(...args);
@@ -133,7 +207,7 @@ async function traceStreamText(
         (fullResponse) => {
           recordTrace(
             {
-              model,
+              model: modelIdentifier,
               prompt: requestParams.prompt || requestParams.messages || null,
               messages: requestParams.messages || null,
             },
@@ -148,7 +222,7 @@ async function traceStreamText(
         (err) =>
           recordError(
             {
-              model,
+              model: modelIdentifier,
               prompt: requestParams.prompt || requestParams.messages || null,
             },
             err,
@@ -168,7 +242,7 @@ async function traceStreamText(
     // If no textStream, just record the result
     recordTrace(
       {
-        model,
+        model: modelIdentifier,
         prompt: requestParams.prompt || requestParams.messages || null,
         messages: requestParams.messages || null,
       },
@@ -184,7 +258,7 @@ async function traceStreamText(
   } catch (error) {
     recordError(
       {
-        model,
+        model: modelIdentifier,
         prompt: requestParams.prompt || requestParams.messages || null,
       },
       error,
