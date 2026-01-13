@@ -64,7 +64,7 @@ function extractProviderFromModel(model: any): string {
   // Handle string models
   if (typeof model === "string") {
     const parts = model.split("/");
-    if (parts.length > 1) {
+    if (parts.length > 1 && parts[0]) {
       return parts[0].toLowerCase();
     }
     // Fallback: infer from model name
@@ -174,14 +174,101 @@ async function traceGenerateText(
     recordError(
       {
         model: modelIdentifier,
-        prompt: requestParams.prompt || requestParams.messages || null,
+        prompt: requestParams.prompt || null,
+        messages: requestParams.messages || null,
+        temperature: requestParams.temperature || null,
+        maxTokens: requestParams.maxTokens || requestParams.max_tokens || null,
       },
       error,
       startTime,
-      options
+      options,
+      provider
     );
     throw error;
   }
+}
+
+/**
+ * Wrap ReadableStream to capture data while preserving ReadableStream interface
+ * Uses tee() to split stream - one for user, one for tracking
+ * This preserves the ReadableStream interface that toTextStreamResponse() expects
+ */
+function wrapReadableStream(
+  stream: ReadableStream<Uint8Array>,
+  onComplete: (fullData: any) => void,
+  onError: (error: any) => void
+): ReadableStream<Uint8Array> {
+  // Use tee() to split the stream - one for user, one for tracking
+  const [userStream, trackingStream] = stream.tee();
+  const decoder = new TextDecoder();
+  let firstTokenTime: number | null = null;
+  const streamStartTime = Date.now();
+  const chunks: string[] = [];
+
+  // Process tracking stream in background (don't block user)
+  // This allows us to capture the full response without delaying the user stream
+  (async () => {
+    try {
+      const reader = trackingStream.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (firstTokenTime === null && value !== null && value !== undefined) {
+          firstTokenTime = Date.now();
+        }
+
+        // Handle both string and binary values
+        // Vercel AI SDK's textStream can yield either strings or Uint8Array
+        let text: string;
+        if (typeof value === "string") {
+          // Value is already a string
+          text = value;
+        } else if (value !== null && value !== undefined) {
+          // Check if value is binary data (Uint8Array or ArrayBufferView)
+          try {
+            // Try to decode - if it fails, it's not binary data
+            const testValue = value as any;
+            if (
+              testValue instanceof Uint8Array ||
+              (typeof ArrayBuffer !== "undefined" &&
+                typeof ArrayBuffer.isView === "function" &&
+                ArrayBuffer.isView(testValue))
+            ) {
+              // Value is binary data - decode it
+              text = decoder.decode(testValue, { stream: true });
+            } else {
+              // Not binary data - convert to string
+              text = String(value);
+            }
+          } catch {
+            // If decoding fails, treat as string
+            text = String(value);
+          }
+        } else {
+          // Skip null/undefined values
+          continue;
+        }
+        chunks.push(text);
+      }
+
+      // Stream completed - reconstruct full response
+      const fullText = chunks.join("");
+      onComplete({
+        text: fullText,
+        timeToFirstToken: firstTokenTime
+          ? firstTokenTime - streamStartTime
+          : null,
+        streamingDuration: firstTokenTime ? Date.now() - firstTokenTime : null,
+        totalLatency: Date.now() - streamStartTime,
+      });
+    } catch (error) {
+      onError(error);
+    }
+  })();
+
+  // Return user stream (original ReadableStream interface preserved)
+  return userStream;
 }
 
 /**
@@ -201,62 +288,76 @@ async function traceStreamText(
   try {
     const result = await originalFn(...args);
 
-    // Vercel AI SDK streamText returns an object with .textStream and other properties
-    // We need to wrap the textStream async iterator
+    // Vercel AI SDK streamText returns an object with .textStream property
+    // textStream is a ReadableStream in modern Vercel AI SDK versions
+    // We use tee() to split it, preserving the ReadableStream interface
     if (result.textStream) {
-      const wrappedStream = wrapStream(
-        result.textStream,
-        (fullResponse) => {
-          recordTrace(
-            {
-              model: modelIdentifier,
-              prompt: requestParams.prompt || requestParams.messages || null,
-              messages: requestParams.messages || null,
-            },
-            fullResponse,
-            startTime,
-            options,
-            fullResponse.timeToFirstToken,
-            fullResponse.streamingDuration,
-            provider
-          );
-        },
-        (err) =>
-          recordError(
-            {
-              model: modelIdentifier,
-              prompt: requestParams.prompt || requestParams.messages || null,
-            },
-            err,
-            startTime,
-            options
-          ),
-        "vercel-ai"
-      );
+      const originalTextStream = result.textStream;
 
-      // Return result with wrapped stream - preserve all original properties and methods
-      // Use Object.create to preserve prototype chain (for methods like toTextStreamResponse)
-      // Then copy all properties with Object.assign
-      const wrappedResult = Object.create(Object.getPrototypeOf(result));
-      Object.assign(wrappedResult, result);
-      
-      // textStream is a getter-only property, so we need to use Object.defineProperty to override it
-      Object.defineProperty(wrappedResult, 'textStream', {
-        value: wrappedStream,
-        writable: true,
-        enumerable: true,
-        configurable: true
-      });
+      // Check if textStream is a ReadableStream (has getReader method)
+      // This is the standard way to detect ReadableStream
+      const isReadableStream =
+        originalTextStream &&
+        typeof originalTextStream.getReader === "function";
 
-      // If toTextStreamResponse exists, we need to bind it properly
-      // But since we're replacing textStream, we might need to recreate the method
-      // However, Vercel AI SDK's toTextStreamResponse might use the original textStream
-      // So we preserve the original method - it should work with our wrapped stream
+      if (isReadableStream) {
+        // It's a ReadableStream - use tee() to split it
+        // This preserves the ReadableStream interface including pipeThrough
+        const wrappedStream = wrapReadableStream(
+          originalTextStream as ReadableStream<Uint8Array>,
+          (fullResponse: any) => {
+            recordTrace(
+              {
+                model: modelIdentifier,
+                prompt: requestParams.prompt || requestParams.messages || null,
+                messages: requestParams.messages || null,
+              },
+              fullResponse,
+              startTime,
+              options,
+              fullResponse.timeToFirstToken,
+              fullResponse.streamingDuration,
+              provider
+            );
+          },
+          (err: any) =>
+            recordError(
+              {
+                model: modelIdentifier,
+                prompt: requestParams.prompt || null,
+                messages: requestParams.messages || null,
+                temperature: requestParams.temperature || null,
+                maxTokens:
+                  requestParams.maxTokens || requestParams.max_tokens || null,
+              },
+              err,
+              startTime,
+              options,
+              provider
+            )
+        );
 
-      return wrappedResult;
+        // Return result with wrapped stream - preserve all original properties and methods
+        // Use Object.create to preserve prototype chain (for methods like toTextStreamResponse)
+        const wrappedResult = Object.create(Object.getPrototypeOf(result));
+        Object.assign(wrappedResult, result);
+
+        // Override textStream with our wrapped ReadableStream
+        // This preserves the ReadableStream interface that toTextStreamResponse() expects
+        Object.defineProperty(wrappedResult, "textStream", {
+          value: wrappedStream,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+
+        return wrappedResult;
+      }
+      // If textStream is not a ReadableStream (shouldn't happen in modern SDK),
+      // fall through to record the result without wrapping
     }
 
-    // If no textStream, just record the result
+    // If no textStream or not a ReadableStream, just record the result
     recordTrace(
       {
         model: modelIdentifier,
@@ -276,11 +377,15 @@ async function traceStreamText(
     recordError(
       {
         model: modelIdentifier,
-        prompt: requestParams.prompt || requestParams.messages || null,
+        prompt: requestParams.prompt || null,
+        messages: requestParams.messages || null,
+        temperature: requestParams.temperature || null,
+        maxTokens: requestParams.maxTokens || requestParams.max_tokens || null,
       },
       error,
       startTime,
-      options
+      options,
+      provider
     );
     throw error;
   }
@@ -356,27 +461,83 @@ function recordTrace(
 
 /**
  * Record error to Observa backend
+ * Creates both an LLM call span (so users can see what failed) and an error event
  */
 function recordError(
   req: any,
   error: any,
   start: number,
-  opts?: ObserveOptions
+  opts?: ObserveOptions,
+  provider?: string
 ) {
+  const duration = Date.now() - start;
+
   try {
     console.error("[Observa] ⚠️ Error Captured:", error.message);
     const sanitizedReq = opts?.redact ? opts.redact(req) : req;
+
     if (opts?.observa) {
+      // Extract model from request
+      const model = sanitizedReq.model || "unknown";
+
+      // Extract input text from prompt or messages (same logic as recordTrace)
+      let inputText: string | null = null;
+      let inputMessages: any = null;
+
+      if (sanitizedReq.prompt) {
+        inputText =
+          typeof sanitizedReq.prompt === "string"
+            ? sanitizedReq.prompt
+            : JSON.stringify(sanitizedReq.prompt);
+      } else if (sanitizedReq.messages) {
+        inputMessages = sanitizedReq.messages;
+        inputText = sanitizedReq.messages
+          .map((m: any) => m.content || m.text || "")
+          .filter(Boolean)
+          .join("\n");
+      }
+
+      // Create LLM call span with error information so users can see what failed
+      // This provides context: model, input, and that it failed
+      opts.observa.trackLLMCall({
+        model: model,
+        input: inputText,
+        output: null, // No output on error
+        inputMessages: inputMessages,
+        outputMessages: null,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        latencyMs: duration,
+        timeToFirstTokenMs: null,
+        streamingDurationMs: null,
+        finishReason: null,
+        responseId: null,
+        operationName: "generate_text",
+        providerName: provider || "vercel-ai",
+        responseModel: model,
+        temperature: sanitizedReq.temperature || null,
+        maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
+      });
+
+      // Also create error event with full context
       opts.observa.trackError({
         errorType: error.name || "UnknownError",
         errorMessage: error.message || "An unknown error occurred",
         stackTrace: error.stack,
-        context: { request: sanitizedReq },
+        context: {
+          request: sanitizedReq,
+          model: model,
+          input: inputText,
+          provider: provider || "vercel-ai",
+          duration_ms: duration,
+        },
         errorCategory: "llm_error",
       });
     }
   } catch (e) {
     // Ignore errors in error handling
+    console.error("[Observa] Failed to record error", e);
   }
 }
 

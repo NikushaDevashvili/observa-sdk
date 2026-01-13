@@ -209,8 +209,11 @@ function recordTrace(
 
 /**
  * Record error to Observa backend
+ * Creates both an LLM call span (so users can see what failed) and an error event
  */
 function recordError(req: any, error: any, start: number, opts?: ObserveOptions) {
+  const duration = Date.now() - start;
+  
   try {
     console.error('[Observa] ⚠️ Error Captured:', error?.message || error);
     
@@ -219,14 +222,55 @@ function recordError(req: any, error: any, start: number, opts?: ObserveOptions)
 
     // Use Observa instance if provided
     if (opts?.observa) {
+      // Extract model from request
+      const model = sanitizedReq.model || 'unknown';
+      
+      // Extract input text from messages (same logic as recordTrace)
+      const inputText = sanitizedReq.messages
+        ?.map((m: any) => m.content)
+        .filter(Boolean)
+        .join('\n') || null;
+      
+      // Create LLM call span with error information so users can see what failed
+      // This provides context: model, input, and that it failed
+      opts.observa.trackLLMCall({
+        model: model,
+        input: inputText,
+        output: null, // No output on error
+        inputMessages: sanitizedReq.messages || null,
+        outputMessages: null,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        latencyMs: duration,
+        timeToFirstTokenMs: null,
+        streamingDurationMs: null,
+        finishReason: null,
+        responseId: null,
+        operationName: 'chat',
+        providerName: 'openai',
+        responseModel: model,
+        temperature: sanitizedReq.temperature || null,
+        maxTokens: sanitizedReq.max_tokens || null,
+      });
+      
+      // Also create error event with full context
       opts.observa.trackError({
         errorType: 'openai_api_error',
         errorMessage: error?.message || String(error),
         stackTrace: error?.stack || null,
-        context: { request: sanitizedReq },
+        context: {
+          request: sanitizedReq,
+          model: model,
+          input: inputText,
+          provider: 'openai',
+          duration_ms: duration,
+        },
+        errorCategory: 'llm_error',
       });
     }
   } catch (e) {
     // Ignore tracking errors
+    console.error('[Observa] Failed to record error', e);
   }
 }
