@@ -214,7 +214,7 @@ async function traceGenerateText(
  */
 function wrapReadableStream(
   stream: ReadableStream<Uint8Array>,
-  onComplete: (fullData: any) => void,
+  onComplete: (fullData: any) => void | Promise<void>,
   onError: (error: any) => void
 ): ReadableStream<Uint8Array> {
   // Use tee() to split the stream - one for user, one for tracking
@@ -323,13 +323,21 @@ function wrapReadableStream(
         return; // Don't call onComplete for empty responses
       }
 
-      onComplete({
-        text: fullText,
-        timeToFirstToken: firstTokenTime
-          ? firstTokenTime - streamStartTime
-          : null,
-        streamingDuration: firstTokenTime ? Date.now() - firstTokenTime : null,
-        totalLatency: Date.now() - streamStartTime,
+      // Call onComplete - handle both sync and async callbacks
+      Promise.resolve(
+        onComplete({
+          text: fullText,
+          timeToFirstToken: firstTokenTime
+            ? firstTokenTime - streamStartTime
+            : null,
+          streamingDuration: firstTokenTime
+            ? Date.now() - firstTokenTime
+            : null,
+          totalLatency: Date.now() - streamStartTime,
+        })
+      ).catch((e) => {
+        console.error("[Observa] Error in onComplete callback:", e);
+        onError(e);
       });
     } catch (error) {
       // Clear timeout on error
@@ -406,14 +414,42 @@ async function traceStreamText(
         // This preserves the ReadableStream interface including pipeThrough
         const wrappedStream = wrapReadableStream(
           originalTextStream as ReadableStream<Uint8Array>,
-          (fullResponse: any) => {
+          async (fullResponse: any) => {
+            // CRITICAL FIX: Extract usage from result.usage (which may be a Promise)
+            // Vercel AI SDK's streamText result.usage resolves when stream completes
+            let usage: any = {};
+            try {
+              if (result.usage) {
+                // Usage can be a Promise or a direct object
+                usage = await Promise.resolve(result.usage);
+              }
+              // Also check result.fullResponse?.usage as fallback
+              if (!usage || Object.keys(usage).length === 0) {
+                if (result.fullResponse?.usage) {
+                  usage = await Promise.resolve(result.fullResponse.usage);
+                }
+              }
+            } catch (e) {
+              // If usage extraction fails, continue with empty usage
+              console.warn("[Observa] Failed to extract usage from result:", e);
+            }
+
+            // Merge usage into fullResponse for recordTrace
             recordTrace(
               {
                 model: modelIdentifier,
                 prompt: requestParams.prompt || requestParams.messages || null,
                 messages: requestParams.messages || null,
               },
-              fullResponse,
+              {
+                ...fullResponse,
+                usage: usage,
+                finishReason: result.finishReason || null,
+                responseId: result.response?.id || null,
+                model: result.model
+                  ? extractModelIdentifier(result.model)
+                  : modelIdentifier,
+              },
               startTime,
               options,
               fullResponse.timeToFirstToken,
@@ -525,118 +561,51 @@ function recordTrace(
     }
 
     // Extract input text from prompt or messages
-      let inputText: string | null = null;
-      if (sanitizedReq.prompt) {
-        inputText =
-          typeof sanitizedReq.prompt === "string"
-            ? sanitizedReq.prompt
-            : JSON.stringify(sanitizedReq.prompt);
-      } else if (sanitizedReq.messages) {
-        inputText = sanitizedReq.messages
-          .map((m: any) => m.content || m.text || "")
-          .filter(Boolean)
-          .join("\n");
-      }
+    let inputText: string | null = null;
+    if (sanitizedReq.prompt) {
+      inputText =
+        typeof sanitizedReq.prompt === "string"
+          ? sanitizedReq.prompt
+          : JSON.stringify(sanitizedReq.prompt);
+    } else if (sanitizedReq.messages) {
+      inputText = sanitizedReq.messages
+        .map((m: any) => m.content || m.text || "")
+        .filter(Boolean)
+        .join("\n");
+    }
 
-      // Extract output text
-      const outputText = sanitizedRes.text || sanitizedRes.content || null;
+    // Extract output text
+    const outputText = sanitizedRes.text || sanitizedRes.content || null;
 
-      // Extract finish reason
-      const finishReason = sanitizedRes.finishReason || null;
+    // Extract finish reason
+    const finishReason = sanitizedRes.finishReason || null;
 
-      // CRITICAL FIX: Detect empty responses
-      const isEmptyResponse =
-        !outputText ||
-        (typeof outputText === "string" && outputText.trim().length === 0);
+    // CRITICAL FIX: Detect empty responses
+    const isEmptyResponse =
+      !outputText ||
+      (typeof outputText === "string" && outputText.trim().length === 0);
 
-      // CRITICAL FIX: Detect failure finish reasons
-      const isFailureFinishReason =
-        finishReason === "content_filter" ||
-        finishReason === "length" ||
-        finishReason === "max_tokens";
+    // CRITICAL FIX: Detect failure finish reasons
+    const isFailureFinishReason =
+      finishReason === "content_filter" ||
+      finishReason === "length" ||
+      finishReason === "max_tokens";
 
-      // If response is empty or has failure finish reason, record as error
-      if (isEmptyResponse || isFailureFinishReason) {
-        // Extract usage
-        const usage = sanitizedRes.usage || {};
-        const inputTokens = usage.promptTokens || usage.inputTokens || null;
-        const outputTokens =
-          usage.completionTokens || usage.outputTokens || null;
-        const totalTokens = usage.totalTokens || null;
-
-        // Record LLM call with null output to show the attempt
-        opts.observa.trackLLMCall({
-          model: sanitizedReq.model || sanitizedRes.model || "unknown",
-          input: inputText,
-          output: null, // No output on error
-          inputMessages: sanitizedReq.messages || null,
-          outputMessages: null,
-          inputTokens,
-          outputTokens,
-          totalTokens,
-          latencyMs: duration,
-          timeToFirstTokenMs: timeToFirstToken || null,
-          streamingDurationMs: streamingDuration || null,
-          finishReason: finishReason,
-          responseId: sanitizedRes.responseId || sanitizedRes.id || null,
-          operationName: "generate_text",
-          providerName: provider || "vercel-ai",
-          responseModel: sanitizedRes.model || sanitizedReq.model || null,
-          temperature: sanitizedReq.temperature || null,
-          maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
-        });
-
-        // Record error event with appropriate error type
-        const errorType = isEmptyResponse
-          ? "empty_response"
-          : finishReason === "content_filter"
-          ? "content_filtered"
-          : "response_truncated";
-        const errorMessage = isEmptyResponse
-          ? "AI returned empty response"
-          : finishReason === "content_filter"
-          ? "AI response was filtered due to content policy"
-          : "AI response was truncated due to token limit";
-
-        opts.observa.trackError({
-          errorType: errorType,
-          errorMessage: errorMessage,
-          stackTrace: null,
-          context: {
-            request: sanitizedReq,
-            response: sanitizedRes,
-            model: sanitizedReq.model || sanitizedRes.model || "unknown",
-            input: inputText,
-            finish_reason: finishReason,
-            provider: provider || "vercel-ai",
-            duration_ms: duration,
-          },
-          errorCategory:
-            finishReason === "content_filter"
-              ? "validation_error"
-              : finishReason === "length" || finishReason === "max_tokens"
-              ? "model_error"
-              : "unknown_error",
-          errorCode: isEmptyResponse ? "empty_response" : finishReason,
-        });
-
-        // Don't record as successful trace
-        return;
-      }
-
-      // Normal successful response - continue with existing logic
+    // If response is empty or has failure finish reason, record as error
+    if (isEmptyResponse || isFailureFinishReason) {
       // Extract usage
       const usage = sanitizedRes.usage || {};
       const inputTokens = usage.promptTokens || usage.inputTokens || null;
       const outputTokens = usage.completionTokens || usage.outputTokens || null;
       const totalTokens = usage.totalTokens || null;
 
+      // Record LLM call with null output to show the attempt
       opts.observa.trackLLMCall({
         model: sanitizedReq.model || sanitizedRes.model || "unknown",
         input: inputText,
-        output: outputText,
+        output: null, // No output on error
         inputMessages: sanitizedReq.messages || null,
-        outputMessages: sanitizedRes.messages || null,
+        outputMessages: null,
         inputTokens,
         outputTokens,
         totalTokens,
@@ -651,6 +620,72 @@ function recordTrace(
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
       });
+
+      // Record error event with appropriate error type
+      const errorType = isEmptyResponse
+        ? "empty_response"
+        : finishReason === "content_filter"
+        ? "content_filtered"
+        : "response_truncated";
+      const errorMessage = isEmptyResponse
+        ? "AI returned empty response"
+        : finishReason === "content_filter"
+        ? "AI response was filtered due to content policy"
+        : "AI response was truncated due to token limit";
+
+      opts.observa.trackError({
+        errorType: errorType,
+        errorMessage: errorMessage,
+        stackTrace: null,
+        context: {
+          request: sanitizedReq,
+          response: sanitizedRes,
+          model: sanitizedReq.model || sanitizedRes.model || "unknown",
+          input: inputText,
+          finish_reason: finishReason,
+          provider: provider || "vercel-ai",
+          duration_ms: duration,
+        },
+        errorCategory:
+          finishReason === "content_filter"
+            ? "validation_error"
+            : finishReason === "length" || finishReason === "max_tokens"
+            ? "model_error"
+            : "unknown_error",
+        errorCode: isEmptyResponse ? "empty_response" : finishReason,
+      });
+
+      // Don't record as successful trace
+      return;
+    }
+
+    // Normal successful response - continue with existing logic
+    // Extract usage
+    const usage = sanitizedRes.usage || {};
+    const inputTokens = usage.promptTokens || usage.inputTokens || null;
+    const outputTokens = usage.completionTokens || usage.outputTokens || null;
+    const totalTokens = usage.totalTokens || null;
+
+    opts.observa.trackLLMCall({
+      model: sanitizedReq.model || sanitizedRes.model || "unknown",
+      input: inputText,
+      output: outputText,
+      inputMessages: sanitizedReq.messages || null,
+      outputMessages: sanitizedRes.messages || null,
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      latencyMs: duration,
+      timeToFirstTokenMs: timeToFirstToken || null,
+      streamingDurationMs: streamingDuration || null,
+      finishReason: finishReason,
+      responseId: sanitizedRes.responseId || sanitizedRes.id || null,
+      operationName: "generate_text",
+      providerName: provider || "vercel-ai",
+      responseModel: sanitizedRes.model || sanitizedReq.model || null,
+      temperature: sanitizedReq.temperature || null,
+      maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
+    });
   } catch (e) {
     console.error("[Observa] Failed to record trace", e);
   }
@@ -686,71 +721,71 @@ function recordError(
     }
 
     // Use pre-extracted model identifier if available, otherwise extract from request
-      const model = sanitizedReq.model || "unknown";
+    const model = sanitizedReq.model || "unknown";
 
-      // Use pre-extracted input text if available (extracted before operation), otherwise extract now
-      let inputText: string | null = preExtractedInputText || null;
-      let inputMessages: any = preExtractedInputMessages || null;
+    // Use pre-extracted input text if available (extracted before operation), otherwise extract now
+    let inputText: string | null = preExtractedInputText || null;
+    let inputMessages: any = preExtractedInputMessages || null;
 
-      if (!inputText) {
-        // Fallback: Extract input text from prompt or messages
-        if (sanitizedReq.prompt) {
-          inputText =
-            typeof sanitizedReq.prompt === "string"
-              ? sanitizedReq.prompt
-              : JSON.stringify(sanitizedReq.prompt);
-        } else if (sanitizedReq.messages) {
-          inputMessages = sanitizedReq.messages;
-          inputText = sanitizedReq.messages
-            .map((m: any) => m.content || m.text || "")
-            .filter(Boolean)
-            .join("\n");
-        }
+    if (!inputText) {
+      // Fallback: Extract input text from prompt or messages
+      if (sanitizedReq.prompt) {
+        inputText =
+          typeof sanitizedReq.prompt === "string"
+            ? sanitizedReq.prompt
+            : JSON.stringify(sanitizedReq.prompt);
+      } else if (sanitizedReq.messages) {
+        inputMessages = sanitizedReq.messages;
+        inputText = sanitizedReq.messages
+          .map((m: any) => m.content || m.text || "")
+          .filter(Boolean)
+          .join("\n");
       }
+    }
 
-      // Extract error information using error utilities
-      const providerName = provider || "vercel-ai";
-      const extractedError = extractProviderError(error, providerName);
+    // Extract error information using error utilities
+    const providerName = provider || "vercel-ai";
+    const extractedError = extractProviderError(error, providerName);
 
-      // Create LLM call span with error information so users can see what failed
-      // This provides context: model, input, and that it failed
-      opts.observa.trackLLMCall({
+    // Create LLM call span with error information so users can see what failed
+    // This provides context: model, input, and that it failed
+    opts.observa.trackLLMCall({
+      model: model,
+      input: inputText,
+      output: null, // No output on error
+      inputMessages: inputMessages,
+      outputMessages: null,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      latencyMs: duration,
+      timeToFirstTokenMs: null,
+      streamingDurationMs: null,
+      finishReason: null,
+      responseId: null,
+      operationName: "generate_text",
+      providerName: providerName,
+      responseModel: model,
+      temperature: sanitizedReq.temperature || null,
+      maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
+    });
+
+    // Also create error event with full context and extracted error codes/categories
+    opts.observa.trackError({
+      errorType: error?.name || extractedError.code || "UnknownError",
+      errorMessage: extractedError.message,
+      stackTrace: error?.stack || null,
+      context: {
+        request: sanitizedReq,
         model: model,
         input: inputText,
-        output: null, // No output on error
-        inputMessages: inputMessages,
-        outputMessages: null,
-        inputTokens: null,
-        outputTokens: null,
-        totalTokens: null,
-        latencyMs: duration,
-        timeToFirstTokenMs: null,
-        streamingDurationMs: null,
-        finishReason: null,
-        responseId: null,
-        operationName: "generate_text",
-        providerName: providerName,
-        responseModel: model,
-        temperature: sanitizedReq.temperature || null,
-        maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
-      });
-
-      // Also create error event with full context and extracted error codes/categories
-      opts.observa.trackError({
-        errorType: error?.name || extractedError.code || "UnknownError",
-        errorMessage: extractedError.message,
-        stackTrace: error?.stack || null,
-        context: {
-          request: sanitizedReq,
-          model: model,
-          input: inputText,
-          provider: providerName,
-          duration_ms: duration,
-          status_code: extractedError.statusCode || null,
-        },
-        errorCategory: extractedError.category,
-        errorCode: extractedError.code,
-      });
+        provider: providerName,
+        duration_ms: duration,
+        status_code: extractedError.statusCode || null,
+      },
+      errorCategory: extractedError.category,
+      errorCode: extractedError.code,
+    });
   } catch (e) {
     // Ignore errors in error handling
     console.error("[Observa] Failed to record error", e);
