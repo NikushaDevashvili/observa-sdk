@@ -651,7 +651,6 @@ function recordTrace(
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
       });
-    }
   } catch (e) {
     console.error("[Observa] Failed to record trace", e);
   }
@@ -752,7 +751,6 @@ function recordError(
         errorCategory: extractedError.category,
         errorCode: extractedError.code,
       });
-    }
   } catch (e) {
     // Ignore errors in error handling
     console.error("[Observa] Failed to record error", e);
