@@ -12,6 +12,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { wrapStream } from "./utils";
 import { getTraceContext, waitUntil } from "../context";
+import { extractProviderError } from "./error-utils";
 
 // Type for Vercel AI SDK functions (avoid direct import to handle optional dependency)
 type GenerateTextFn = any;
@@ -134,6 +135,22 @@ async function traceGenerateText(
   const provider = extractProviderFromModel(model);
   const modelIdentifier = extractModelIdentifier(model);
 
+  // Extract input text early (before operation starts) to ensure it's captured even on errors
+  let inputText: string | null = null;
+  let inputMessages: any = null;
+  if (requestParams.prompt) {
+    inputText =
+      typeof requestParams.prompt === "string"
+        ? requestParams.prompt
+        : JSON.stringify(requestParams.prompt);
+  } else if (requestParams.messages) {
+    inputMessages = requestParams.messages;
+    inputText = requestParams.messages
+      .map((m: any) => m.content || m.text || "")
+      .filter(Boolean)
+      .join("\n");
+  }
+
   try {
     const result = await originalFn(...args);
 
@@ -182,7 +199,9 @@ async function traceGenerateText(
       error,
       startTime,
       options,
-      provider
+      provider,
+      inputText,
+      inputMessages
     );
     throw error;
   }
@@ -285,6 +304,22 @@ async function traceStreamText(
   const provider = extractProviderFromModel(model);
   const modelIdentifier = extractModelIdentifier(model);
 
+  // Extract input text early (before operation starts) to ensure it's captured even on errors
+  let inputText: string | null = null;
+  let inputMessages: any = null;
+  if (requestParams.prompt) {
+    inputText =
+      typeof requestParams.prompt === "string"
+        ? requestParams.prompt
+        : JSON.stringify(requestParams.prompt);
+  } else if (requestParams.messages) {
+    inputMessages = requestParams.messages;
+    inputText = requestParams.messages
+      .map((m: any) => m.content || m.text || "")
+      .filter(Boolean)
+      .join("\n");
+  }
+
   try {
     const result = await originalFn(...args);
 
@@ -333,7 +368,9 @@ async function traceStreamText(
               err,
               startTime,
               options,
-              provider
+              provider,
+              inputText,
+              inputMessages
             )
         );
 
@@ -385,7 +422,9 @@ async function traceStreamText(
       error,
       startTime,
       options,
-      provider
+      provider,
+      inputText,
+      inputMessages
     );
     throw error;
   }
@@ -468,34 +507,43 @@ function recordError(
   error: any,
   start: number,
   opts?: ObserveOptions,
-  provider?: string
+  provider?: string,
+  preExtractedInputText?: string | null,
+  preExtractedInputMessages?: any
 ) {
   const duration = Date.now() - start;
 
   try {
-    console.error("[Observa] ⚠️ Error Captured:", error.message);
+    console.error("[Observa] ⚠️ Error Captured:", error?.message || error);
     const sanitizedReq = opts?.redact ? opts.redact(req) : req;
 
     if (opts?.observa) {
-      // Extract model from request
+      // Use pre-extracted model identifier if available, otherwise extract from request
       const model = sanitizedReq.model || "unknown";
 
-      // Extract input text from prompt or messages (same logic as recordTrace)
-      let inputText: string | null = null;
-      let inputMessages: any = null;
+      // Use pre-extracted input text if available (extracted before operation), otherwise extract now
+      let inputText: string | null = preExtractedInputText || null;
+      let inputMessages: any = preExtractedInputMessages || null;
 
-      if (sanitizedReq.prompt) {
-        inputText =
-          typeof sanitizedReq.prompt === "string"
-            ? sanitizedReq.prompt
-            : JSON.stringify(sanitizedReq.prompt);
-      } else if (sanitizedReq.messages) {
-        inputMessages = sanitizedReq.messages;
-        inputText = sanitizedReq.messages
-          .map((m: any) => m.content || m.text || "")
-          .filter(Boolean)
-          .join("\n");
+      if (!inputText) {
+        // Fallback: Extract input text from prompt or messages
+        if (sanitizedReq.prompt) {
+          inputText =
+            typeof sanitizedReq.prompt === "string"
+              ? sanitizedReq.prompt
+              : JSON.stringify(sanitizedReq.prompt);
+        } else if (sanitizedReq.messages) {
+          inputMessages = sanitizedReq.messages;
+          inputText = sanitizedReq.messages
+            .map((m: any) => m.content || m.text || "")
+            .filter(Boolean)
+            .join("\n");
+        }
       }
+
+      // Extract error information using error utilities
+      const providerName = provider || "vercel-ai";
+      const extractedError = extractProviderError(error, providerName);
 
       // Create LLM call span with error information so users can see what failed
       // This provides context: model, input, and that it failed
@@ -514,25 +562,27 @@ function recordError(
         finishReason: null,
         responseId: null,
         operationName: "generate_text",
-        providerName: provider || "vercel-ai",
+        providerName: providerName,
         responseModel: model,
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
       });
 
-      // Also create error event with full context
+      // Also create error event with full context and extracted error codes/categories
       opts.observa.trackError({
-        errorType: error.name || "UnknownError",
-        errorMessage: error.message || "An unknown error occurred",
-        stackTrace: error.stack,
+        errorType: error?.name || extractedError.code || "UnknownError",
+        errorMessage: extractedError.message,
+        stackTrace: error?.stack || null,
         context: {
           request: sanitizedReq,
           model: model,
           input: inputText,
-          provider: provider || "vercel-ai",
+          provider: providerName,
           duration_ms: duration,
+          status_code: extractedError.statusCode || null,
         },
-        errorCategory: "llm_error",
+        errorCategory: extractedError.category,
+        errorCode: extractedError.code,
       });
     }
   } catch (e) {
