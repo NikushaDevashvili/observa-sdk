@@ -1,6 +1,6 @@
 {
   "name": "observa-sdk",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "Enterprise-grade observability SDK for AI applications. Track and monitor LLM interactions with zero friction.",
   "type": "module",
   "main": "./dist/index.cjs",
