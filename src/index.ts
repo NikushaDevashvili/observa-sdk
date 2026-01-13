@@ -8,9 +8,9 @@
 // ------------------------------------------------------------
 
 // Import instrumentation wrappers (tsup bundles everything together)
-import { observeOpenAI as observeOpenAIFn } from './instrumentation/openai.js';
-import { observeAnthropic as observeAnthropicFn } from './instrumentation/anthropic.js';
-import { observeVercelAI as observeVercelAIFn } from './instrumentation/vercel-ai.js';
+import { observeOpenAI as observeOpenAIFn } from "./instrumentation/openai.js";
+import { observeAnthropic as observeAnthropicFn } from "./instrumentation/anthropic.js";
+import { observeVercelAI as observeVercelAIFn } from "./instrumentation/vercel-ai.js";
 
 // Import context propagation (Node.js only)
 let contextModule: any = null;
@@ -258,7 +258,12 @@ interface CanonicalEvent {
       system_fingerprint?: string | null;
       cost?: number | null;
       // TIER 1: OTEL Semantic Conventions
-      operation_name?: "chat" | "text_completion" | "generate_content" | string | null;
+      operation_name?:
+        | "chat"
+        | "text_completion"
+        | "generate_content"
+        | string
+        | null;
       provider_name?: string | null;
       response_model?: string | null;
       // TIER 2: Sampling parameters
@@ -626,6 +631,11 @@ export class Observa {
   private spanStack: string[] = []; // Stack for tracking parent-child relationships
   private traceStartTime: number | null = null;
 
+  // Track traces with errors (for automatic trace_end generation when using instrumentation)
+  private tracesWithErrors: Set<string> = new Set();
+  // Track root span IDs for traces (for automatic trace_end generation)
+  private traceRootSpanIds: Map<string, string> = new Map();
+
   constructor(config: ObservaInitConfig) {
     this.apiKey = config.apiKey;
 
@@ -762,9 +772,20 @@ export class Observa {
         ? this.spanStack[this.spanStack.length - 1]
         : null;
 
+    const spanId = eventData.span_id || crypto.randomUUID();
+
+    // Track root span IDs for traces (for automatic trace_end generation)
+    // When using instrumentation without startTrace, the first event's span becomes the root
+    if (
+      !this.currentTraceId &&
+      !this.traceRootSpanIds.has(baseProps.trace_id)
+    ) {
+      this.traceRootSpanIds.set(baseProps.trace_id, spanId);
+    }
+
     const event: CanonicalEvent = {
       ...baseProps,
-      span_id: eventData.span_id || crypto.randomUUID(),
+      span_id: spanId,
       parent_span_id:
         (eventData.parent_span_id !== undefined
           ? eventData.parent_span_id
@@ -852,7 +873,12 @@ export class Observa {
     temperature?: number | null;
     maxTokens?: number | null;
     // TIER 1: OTEL Semantic Conventions
-    operationName?: "chat" | "text_completion" | "generate_content" | string | null;
+    operationName?:
+      | "chat"
+      | "text_completion"
+      | "generate_content"
+      | string
+      | null;
     providerName?: string | null; // e.g., "openai", "anthropic", "gcp.vertex_ai"
     responseModel?: string | null; // Actual model used vs requested
     // TIER 2: Sampling parameters
@@ -896,9 +922,15 @@ export class Observa {
       const modelLower = options.model.toLowerCase();
       if (modelLower.includes("gpt") || modelLower.includes("openai")) {
         providerName = "openai";
-      } else if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
+      } else if (
+        modelLower.includes("claude") ||
+        modelLower.includes("anthropic")
+      ) {
         providerName = "anthropic";
-      } else if (modelLower.includes("gemini") || modelLower.includes("google")) {
+      } else if (
+        modelLower.includes("gemini") ||
+        modelLower.includes("google")
+      ) {
         providerName = "google";
       } else if (modelLower.includes("vertex")) {
         providerName = "gcp.vertex_ai";
@@ -1045,7 +1077,8 @@ export class Observa {
           vector_metric: options.vectorMetric || null,
           rerank_score: options.rerankScore || null,
           fusion_method: options.fusionMethod || null,
-          deduplication_removed_count: options.deduplicationRemovedCount || null,
+          deduplication_removed_count:
+            options.deduplicationRemovedCount || null,
           quality_score: options.qualityScore || null,
         },
       },
@@ -1074,6 +1107,11 @@ export class Observa {
     if (!stackTrace && options.error instanceof Error && options.error.stack) {
       stackTrace = options.error.stack;
     }
+
+    const baseProps = this.createBaseEventProperties();
+
+    // Mark this trace as having an error (for automatic trace_end generation)
+    this.tracesWithErrors.add(baseProps.trace_id);
 
     this.addEvent({
       event_type: "error",
@@ -1197,9 +1235,15 @@ export class Observa {
     let providerName = options.providerName;
     if (!providerName && options.model) {
       const modelLower = options.model.toLowerCase();
-      if (modelLower.includes("text-embedding") || modelLower.includes("openai")) {
+      if (
+        modelLower.includes("text-embedding") ||
+        modelLower.includes("openai")
+      ) {
         providerName = "openai";
-      } else if (modelLower.includes("textembedding") || modelLower.includes("google")) {
+      } else if (
+        modelLower.includes("textembedding") ||
+        modelLower.includes("google")
+      ) {
         providerName = "google";
       } else if (modelLower.includes("vertex")) {
         providerName = "gcp.vertex_ai";
@@ -1468,13 +1512,22 @@ export class Observa {
         const modelLower = trace.model.toLowerCase();
         if (modelLower.includes("gpt") || modelLower.includes("openai")) {
           providerName = "openai";
-        } else if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
+        } else if (
+          modelLower.includes("claude") ||
+          modelLower.includes("anthropic")
+        ) {
           providerName = "anthropic";
-        } else if (modelLower.includes("gemini") || modelLower.includes("google")) {
+        } else if (
+          modelLower.includes("gemini") ||
+          modelLower.includes("google")
+        ) {
           providerName = "google";
         } else if (modelLower.includes("vertex")) {
           providerName = "gcp.vertex_ai";
-        } else if (modelLower.includes("bedrock") || modelLower.includes("aws")) {
+        } else if (
+          modelLower.includes("bedrock") ||
+          modelLower.includes("aws")
+        ) {
           providerName = "aws.bedrock";
         }
       }
@@ -1567,8 +1620,89 @@ export class Observa {
       eventsByTrace.get(event.trace_id)!.push(event);
     }
 
-    // Send each trace's events together
+    // For each trace, ensure trace_start and trace_end events exist
+    // This is critical for instrumentation usage without explicit trace management
     for (const [traceId, events] of eventsByTrace.entries()) {
+      const hasTraceStart = events.some((e) => e.event_type === "trace_start");
+      const hasTraceEnd = events.some((e) => e.event_type === "trace_end");
+      const hasError = this.tracesWithErrors.has(traceId);
+      const rootSpanId =
+        this.traceRootSpanIds.get(traceId) ||
+        events[0]?.span_id ||
+        crypto.randomUUID();
+
+      // Get base properties from first event (all events in a trace share tenant/project/env)
+      const firstEvent = events[0];
+      if (!firstEvent) continue;
+
+      // If no trace_start exists, create one (happens when using instrumentation without startTrace)
+      if (!hasTraceStart) {
+        const traceStartEvent: CanonicalEvent = {
+          tenant_id: firstEvent.tenant_id,
+          project_id: firstEvent.project_id,
+          environment: firstEvent.environment,
+          trace_id: traceId,
+          span_id: rootSpanId,
+          parent_span_id: null,
+          timestamp: firstEvent.timestamp,
+          event_type: "trace_start",
+          attributes: {
+            trace_start: {
+              name: null,
+              metadata: null,
+            },
+          },
+        };
+        events.unshift(traceStartEvent); // Add at beginning
+      }
+
+      // If no trace_end exists, create one with appropriate outcome
+      if (!hasTraceEnd) {
+        // Calculate summary statistics
+        const llmEvents = events.filter((e) => e.event_type === "llm_call");
+        const totalTokens = llmEvents.reduce(
+          (sum, e) => sum + (e.attributes.llm_call?.total_tokens || 0),
+          0
+        );
+        const totalCost = llmEvents.reduce(
+          (sum, e) => sum + (e.attributes.llm_call?.cost || 0),
+          0
+        );
+
+        // Calculate total latency from first to last event
+        const timestamps = events
+          .map((e) => new Date(e.timestamp).getTime())
+          .filter(Boolean);
+        const totalLatency =
+          timestamps.length > 0
+            ? Math.max(...timestamps) - Math.min(...timestamps)
+            : null;
+
+        const traceEndEvent: CanonicalEvent = {
+          tenant_id: firstEvent.tenant_id,
+          project_id: firstEvent.project_id,
+          environment: firstEvent.environment,
+          trace_id: traceId,
+          span_id: rootSpanId,
+          parent_span_id: null,
+          timestamp: new Date().toISOString(),
+          event_type: "trace_end",
+          attributes: {
+            trace_end: {
+              total_latency_ms: totalLatency,
+              total_tokens: totalTokens || null,
+              total_cost: totalCost || null,
+              outcome: hasError ? "error" : "success",
+            },
+          },
+        };
+        events.push(traceEndEvent); // Add at end
+      }
+
+      // Clean up tracking maps after flushing
+      this.tracesWithErrors.delete(traceId);
+      this.traceRootSpanIds.delete(traceId);
+
       await this._sendEventsWithRetry(events);
     }
   }
@@ -1625,11 +1759,11 @@ export class Observa {
 
   /**
    * Observe OpenAI client - wraps client with automatic tracing
-   * 
+   *
    * @param client - OpenAI client instance
    * @param options - Observation options (name, tags, userId, sessionId, redact)
    * @returns Wrapped OpenAI client
-   * 
+   *
    * @example
    * ```typescript
    * import OpenAI from 'openai';
@@ -1640,31 +1774,34 @@ export class Observa {
    * });
    * ```
    */
-  observeOpenAI(client: any, options?: {
-    name?: string;
-    tags?: string[];
-    userId?: string;
-    sessionId?: string;
-    redact?: (data: any) => any;
-  }): any {
+  observeOpenAI(
+    client: any,
+    options?: {
+      name?: string;
+      tags?: string[];
+      userId?: string;
+      sessionId?: string;
+      redact?: (data: any) => any;
+    }
+  ): any {
     try {
       // Use static import - tsup bundles everything together
       // This works in both ESM and CommonJS when bundled
       return observeOpenAIFn(client, { ...options, observa: this });
     } catch (error) {
       // Fail gracefully - return unwrapped client
-      console.error('[Observa] Failed to load OpenAI wrapper:', error);
+      console.error("[Observa] Failed to load OpenAI wrapper:", error);
       return client;
     }
   }
 
   /**
    * Observe Anthropic client - wraps client with automatic tracing
-   * 
+   *
    * @param client - Anthropic client instance
    * @param options - Observation options (name, tags, userId, sessionId, redact)
    * @returns Wrapped Anthropic client
-   * 
+   *
    * @example
    * ```typescript
    * import Anthropic from '@anthropic-ai/sdk';
@@ -1675,41 +1812,44 @@ export class Observa {
    * });
    * ```
    */
-  observeAnthropic(client: any, options?: {
-    name?: string;
-    tags?: string[];
-    userId?: string;
-    sessionId?: string;
-    redact?: (data: any) => any;
-  }): any {
+  observeAnthropic(
+    client: any,
+    options?: {
+      name?: string;
+      tags?: string[];
+      userId?: string;
+      sessionId?: string;
+      redact?: (data: any) => any;
+    }
+  ): any {
     try {
       // Use static import - tsup bundles everything together
       // This works in both ESM and CommonJS when bundled
       return observeAnthropicFn(client, { ...options, observa: this });
     } catch (error) {
       // Fail gracefully - return unwrapped client
-      console.error('[Observa] Failed to load Anthropic wrapper:', error);
+      console.error("[Observa] Failed to load Anthropic wrapper:", error);
       return client;
     }
   }
 
   /**
    * Observe Vercel AI SDK - wraps generateText and streamText functions
-   * 
+   *
    * @param aiSdk - Vercel AI SDK module (imported from 'ai')
    * @param options - Observation options (name, tags, userId, sessionId, redact)
    * @returns Wrapped AI SDK with automatic tracing
-   * 
+   *
    * @example
    * ```typescript
    * import { generateText, streamText } from 'ai';
    * const observa = init({ apiKey: '...' });
-   * 
+   *
    * const ai = observa.observeVercelAI({ generateText, streamText }, {
    *   name: 'my-app',
    *   redact: (data) => ({ ...data, prompt: '[REDACTED]' })
    * });
-   * 
+   *
    * // Use wrapped functions - automatically tracked!
    * const result = await ai.generateText({
    *   model: 'openai/gpt-4',
@@ -1717,24 +1857,27 @@ export class Observa {
    * });
    * ```
    */
-  observeVercelAI(aiSdk: {
-    generateText?: any;
-    streamText?: any;
-    [key: string]: any;
-  }, options?: {
-    name?: string;
-    tags?: string[];
-    userId?: string;
-    sessionId?: string;
-    redact?: (data: any) => any;
-  }): any {
+  observeVercelAI(
+    aiSdk: {
+      generateText?: any;
+      streamText?: any;
+      [key: string]: any;
+    },
+    options?: {
+      name?: string;
+      tags?: string[];
+      userId?: string;
+      sessionId?: string;
+      redact?: (data: any) => any;
+    }
+  ): any {
     try {
       // Use static import - tsup bundles everything together
       // This works in both ESM and CommonJS when bundled
       return observeVercelAIFn(aiSdk, { ...options, observa: this });
     } catch (error) {
       // Fail gracefully - return unwrapped SDK
-      console.error('[Observa] Failed to load Vercel AI SDK wrapper:', error);
+      console.error("[Observa] Failed to load Vercel AI SDK wrapper:", error);
       return aiSdk;
     }
   }
