@@ -118,7 +118,19 @@ const response = await wrappedAnthropic.messages.create({
 
 ### Auto-Capture with Vercel AI SDK
 
-Vercel AI SDK is a unified SDK that works with multiple providers:
+Vercel AI SDK is a unified SDK that works with multiple providers (OpenAI, Anthropic, Google, etc.).
+
+#### Installation
+
+First, install the required packages:
+
+```bash
+npm install observa-sdk ai @ai-sdk/openai @ai-sdk/anthropic
+# or for other providers:
+npm install @ai-sdk/google @ai-sdk/cohere
+```
+
+#### Basic Example (Node.js/Server)
 
 ```typescript
 import { init } from "observa-sdk";
@@ -149,6 +161,124 @@ const stream = await ai.streamText({
 
 for await (const chunk of stream.textStream) {
   process.stdout.write(chunk);
+}
+```
+
+#### Next.js App Router Example
+
+For Next.js applications, use the route handler pattern:
+
+```typescript
+// app/api/chat/route.ts
+import { streamText, UIMessage, convertToModelMessages } from "ai";
+import { init } from "observa-sdk";
+import { openai } from "@ai-sdk/openai";
+
+const observa = init({
+  apiKey: process.env.OBSERVA_API_KEY!,
+  apiUrl: process.env.OBSERVA_API_URL,
+});
+
+const ai = observa.observeVercelAI({ streamText }, {
+  name: "my-nextjs-app",
+});
+
+export async function POST(req: Request) {
+  const { messages }: { messages: UIMessage[] } = await req.json();
+
+  const result = await ai.streamText({
+    model: openai("gpt-4"),
+    messages: await convertToModelMessages(messages),
+  });
+
+  // Return streaming response for Next.js
+  return result.toUIMessageStreamResponse();
+}
+```
+
+#### Client-Side with React (useChat Hook)
+
+```typescript
+// app/page.tsx
+"use client";
+import { useChat } from "@ai-sdk/react";
+
+export default function Chat() {
+  const { messages, input, handleInputChange, handleSubmit } = useChat({
+    api: "/api/chat",
+  });
+
+  return (
+    <div>
+      {messages.map((message) => (
+        <div key={message.id}>{message.content}</div>
+      ))}
+      <form onSubmit={handleSubmit}>
+        <input value={input} onChange={handleInputChange} />
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  );
+}
+```
+
+#### With Tools/Function Calling
+
+Observa automatically tracks tool calls:
+
+```typescript
+import { z } from "zod";
+
+const result = await ai.streamText({
+  model: openai("gpt-4"),
+  messages: [...],
+  tools: {
+    getWeather: {
+      description: "Get the weather for a location",
+      parameters: z.object({
+        location: z.string(),
+      }),
+      execute: async ({ location }) => {
+        // Tool implementation - automatically tracked by Observa
+        return { temperature: 72, condition: "sunny" };
+      },
+    },
+  },
+});
+```
+
+#### Model Format Options
+
+Vercel AI SDK supports two model formats:
+
+1. **Provider function** (recommended):
+```typescript
+import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
+
+model: openai("gpt-4")
+model: anthropic("claude-3-opus-20240229")
+```
+
+2. **String format** (for AI Gateway):
+```typescript
+model: "openai/gpt-4"
+model: "anthropic/claude-3-opus-20240229"
+```
+
+#### Error Handling
+
+Errors are automatically tracked:
+
+```typescript
+try {
+  const result = await ai.generateText({
+    model: openai("gpt-4"),
+    prompt: "Hello!",
+  });
+} catch (error) {
+  // Error is automatically tracked in Observa
+  console.error("LLM call failed:", error);
 }
 ```
 

@@ -61,6 +61,25 @@ export function observeOpenAI(
     return proxyCache.get(client);
   }
 
+  // CRITICAL: Warn if observa instance is not provided
+  // This is the most common mistake - users importing observeOpenAI directly
+  if (!options?.observa) {
+    console.error(
+      "[Observa] ⚠️ CRITICAL ERROR: observa instance not provided!\n" +
+        "\n" +
+        "Tracking will NOT work. You must use observa.observeOpenAI() instead.\n" +
+        "\n" +
+        "❌ WRONG (importing directly):\n" +
+        "  import { observeOpenAI } from 'observa-sdk/instrumentation';\n" +
+        "  const wrapped = observeOpenAI(openai);\n" +
+        "\n" +
+        "✅ CORRECT (using instance method):\n" +
+        "  import { init } from 'observa-sdk';\n" +
+        "  const observa = init({ apiKey: '...' });\n" +
+        "  const wrapped = observa.observeOpenAI(openai);\n"
+    );
+  }
+
   try {
     const wrapped = new Proxy(client, {
       get(target, prop, receiver) {
@@ -129,7 +148,7 @@ async function traceOpenAICall(
       // Wrap stream to capture data without blocking TTFT
       return wrapStream(
         result,
-        (fullResponse) => {
+        (fullResponse: any) => {
           // Stream completed -> Send Trace to Observa
           recordTrace(
             requestParams,
@@ -140,7 +159,7 @@ async function traceOpenAICall(
             fullResponse.streamingDuration
           );
         },
-        (err) =>
+        (err: any) =>
           recordError(
             requestParams,
             err,
@@ -195,8 +214,18 @@ function recordTrace(
     // Map to OTEL attributes
     const otelAttributes = mapOpenAIToOTEL(sanitizedReq, sanitizedRes);
 
+    // CRITICAL: Validate that observa instance is provided
+    if (!opts?.observa) {
+      console.error(
+        "[Observa] ⚠️ CRITICAL: observa instance not provided to observeOpenAI(). " +
+          "Tracking is disabled. Make sure you're using observa.observeOpenAI() " +
+          "instead of importing observeOpenAI directly from 'observa-sdk/instrumentation'."
+      );
+      return; // Silently fail (don't crash user's app)
+    }
+
     // Use Observa instance if provided
-    if (opts?.observa) {
+    if (opts.observa) {
       // Extract input text from messages
       const inputText =
         sanitizedReq.messages
@@ -206,8 +235,70 @@ function recordTrace(
 
       // Extract output text from response
       const outputText = sanitizedRes?.choices?.[0]?.message?.content || null;
+      
+      // Extract finish reason
+      const finishReason = sanitizedRes?.choices?.[0]?.finish_reason || null;
+      
+      // CRITICAL FIX: Detect empty responses
+      const isEmptyResponse = !outputText || (typeof outputText === 'string' && outputText.trim().length === 0);
+      
+      // CRITICAL FIX: Detect failure finish reasons
+      const isFailureFinishReason = finishReason === 'content_filter' || finishReason === 'length';
+      
+      // If response is empty or has failure finish reason, record as error
+      if (isEmptyResponse || isFailureFinishReason) {
+        // Record LLM call with null output to show the attempt
+        opts.observa.trackLLMCall({
+          model: sanitizedReq.model || sanitizedRes?.model || "unknown",
+          input: inputText,
+          output: null, // No output on error
+          inputMessages: sanitizedReq.messages || null,
+          outputMessages: null,
+          inputTokens: sanitizedRes?.usage?.prompt_tokens || null,
+          outputTokens: sanitizedRes?.usage?.completion_tokens || null,
+          totalTokens: sanitizedRes?.usage?.total_tokens || null,
+          latencyMs: duration,
+          timeToFirstTokenMs: timeToFirstToken || null,
+          streamingDurationMs: streamingDuration || null,
+          finishReason: finishReason,
+          responseId: sanitizedRes?.id || null,
+          operationName: "chat",
+          providerName: "openai",
+          responseModel: sanitizedRes?.model || sanitizedReq.model || null,
+          temperature: sanitizedReq.temperature || null,
+          maxTokens: sanitizedReq.max_tokens || null,
+        });
 
-      // Use existing trackLLMCall method
+        // Record error event with appropriate error type
+        const errorType = isEmptyResponse ? "empty_response" : (finishReason === 'content_filter' ? "content_filtered" : "response_truncated");
+        const errorMessage = isEmptyResponse 
+          ? "AI returned empty response" 
+          : (finishReason === 'content_filter' 
+            ? "AI response was filtered due to content policy" 
+            : "AI response was truncated due to token limit");
+        
+        opts.observa.trackError({
+          errorType: errorType,
+          errorMessage: errorMessage,
+          stackTrace: null,
+          context: {
+            request: sanitizedReq,
+            response: sanitizedRes,
+            model: sanitizedReq.model || sanitizedRes?.model || "unknown",
+            input: inputText,
+            finish_reason: finishReason,
+            provider: "openai",
+            duration_ms: duration,
+          },
+          errorCategory: finishReason === 'content_filter' ? "validation_error" : (finishReason === 'length' ? "model_error" : "unknown_error"),
+          errorCode: isEmptyResponse ? "empty_response" : finishReason,
+        });
+        
+        // Don't record as successful trace
+        return;
+      }
+
+      // Normal successful response - continue with existing logic
       opts.observa.trackLLMCall({
         model: sanitizedReq.model || sanitizedRes?.model || "unknown",
         input: inputText,
@@ -221,7 +312,7 @@ function recordTrace(
         latencyMs: duration,
         timeToFirstTokenMs: timeToFirstToken || null,
         streamingDurationMs: streamingDuration || null,
-        finishReason: sanitizedRes?.choices?.[0]?.finish_reason || null,
+        finishReason: finishReason,
         responseId: sanitizedRes?.id || null,
         operationName: "chat",
         providerName: "openai",
@@ -257,8 +348,18 @@ function recordError(
     // Sanitize request with redact hook
     const sanitizedReq = opts?.redact ? opts.redact(req) : req;
 
+    // CRITICAL: Validate that observa instance is provided
+    if (!opts?.observa) {
+      console.error(
+        "[Observa] ⚠️ CRITICAL: observa instance not provided to observeOpenAI(). " +
+          "Error tracking is disabled. Make sure you're using observa.observeOpenAI() " +
+          "instead of importing observeOpenAI directly from 'observa-sdk/instrumentation'."
+      );
+      return; // Silently fail (don't crash user's app)
+    }
+
     // Use Observa instance if provided
-    if (opts?.observa) {
+    if (opts.observa) {
       // Use pre-extracted model if available, otherwise extract from request
       const model = preExtractedModel || sanitizedReq.model || "unknown";
 

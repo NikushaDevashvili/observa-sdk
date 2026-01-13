@@ -227,11 +227,37 @@ function wrapReadableStream(
   // Process tracking stream in background (don't block user)
   // This allows us to capture the full response without delaying the user stream
   (async () => {
+    const timeoutMs = 300000; // 5 minutes default timeout
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
     try {
       const reader = trackingStream.getReader();
+
+      // Set up timeout
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reader.cancel(); // Cancel the reader
+          reject(
+            new Error(
+              `Stream timeout after ${timeoutMs}ms - no response received`
+            )
+          );
+        }, timeoutMs);
+      });
+
+      // Race between stream reading and timeout
       while (true) {
-        const { done, value } = await reader.read();
+        const readPromise = reader.read();
+        const result = await Promise.race([readPromise, timeoutPromise]);
+
+        const { done, value } = result;
         if (done) break;
+
+        // Clear timeout on first chunk
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
 
         if (firstTokenTime === null && value !== null && value !== undefined) {
           firstTokenTime = Date.now();
@@ -271,8 +297,32 @@ function wrapReadableStream(
         chunks.push(text);
       }
 
+      // Clear timeout if stream completed successfully
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+
       // Stream completed - reconstruct full response
       const fullText = chunks.join("");
+
+      // CRITICAL FIX: Check if response is empty (including case where stream completes with no chunks)
+      if (chunks.length === 0 || !fullText || fullText.trim().length === 0) {
+        console.error("[Observa] Empty response detected:", {
+          chunks: chunks.length,
+          fullTextLength: fullText?.length || 0,
+        });
+        onError({
+          name: "EmptyResponseError",
+          message: "AI returned empty response",
+          errorType: "empty_response",
+          errorCategory: "model_error",
+          chunks: chunks.length,
+          fullText: fullText || "",
+        });
+        return; // Don't call onComplete for empty responses
+      }
+
       onComplete({
         text: fullText,
         timeToFirstToken: firstTokenTime
@@ -282,7 +332,23 @@ function wrapReadableStream(
         totalLatency: Date.now() - streamStartTime,
       });
     } catch (error) {
-      onError(error);
+      // Clear timeout on error
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+
+      // Check if it's a timeout error
+      if (error instanceof Error && error.message.includes("timeout")) {
+        onError({
+          ...error,
+          name: "StreamTimeoutError",
+          errorType: "timeout_error",
+          errorCategory: "timeout_error",
+        });
+      } else {
+        onError(error);
+      }
     }
   })();
 
@@ -446,10 +512,19 @@ function recordTrace(
 
   try {
     const sanitizedReq = opts?.redact ? opts.redact(req) : req;
-    const sanitizedRes = opts?.redact ? opts.redact(res) : req;
+    const sanitizedRes = opts?.redact ? opts.redact(res) : res; // Fixed: was using req instead of res
 
-    if (opts?.observa) {
-      // Extract input text from prompt or messages
+    // CRITICAL: Validate that observa instance is provided
+    if (!opts?.observa) {
+      console.error(
+        "[Observa] ⚠️ CRITICAL: observa instance not provided to observeVercelAI(). " +
+          "Tracking is disabled. Make sure you're using observa.observeVercelAI() " +
+          "instead of importing observeVercelAI directly from 'observa-sdk/instrumentation'."
+      );
+      return; // Silently fail (don't crash user's app)
+    }
+
+    // Extract input text from prompt or messages
       let inputText: string | null = null;
       if (sanitizedReq.prompt) {
         inputText =
@@ -466,6 +541,90 @@ function recordTrace(
       // Extract output text
       const outputText = sanitizedRes.text || sanitizedRes.content || null;
 
+      // Extract finish reason
+      const finishReason = sanitizedRes.finishReason || null;
+
+      // CRITICAL FIX: Detect empty responses
+      const isEmptyResponse =
+        !outputText ||
+        (typeof outputText === "string" && outputText.trim().length === 0);
+
+      // CRITICAL FIX: Detect failure finish reasons
+      const isFailureFinishReason =
+        finishReason === "content_filter" ||
+        finishReason === "length" ||
+        finishReason === "max_tokens";
+
+      // If response is empty or has failure finish reason, record as error
+      if (isEmptyResponse || isFailureFinishReason) {
+        // Extract usage
+        const usage = sanitizedRes.usage || {};
+        const inputTokens = usage.promptTokens || usage.inputTokens || null;
+        const outputTokens =
+          usage.completionTokens || usage.outputTokens || null;
+        const totalTokens = usage.totalTokens || null;
+
+        // Record LLM call with null output to show the attempt
+        opts.observa.trackLLMCall({
+          model: sanitizedReq.model || sanitizedRes.model || "unknown",
+          input: inputText,
+          output: null, // No output on error
+          inputMessages: sanitizedReq.messages || null,
+          outputMessages: null,
+          inputTokens,
+          outputTokens,
+          totalTokens,
+          latencyMs: duration,
+          timeToFirstTokenMs: timeToFirstToken || null,
+          streamingDurationMs: streamingDuration || null,
+          finishReason: finishReason,
+          responseId: sanitizedRes.responseId || sanitizedRes.id || null,
+          operationName: "generate_text",
+          providerName: provider || "vercel-ai",
+          responseModel: sanitizedRes.model || sanitizedReq.model || null,
+          temperature: sanitizedReq.temperature || null,
+          maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
+        });
+
+        // Record error event with appropriate error type
+        const errorType = isEmptyResponse
+          ? "empty_response"
+          : finishReason === "content_filter"
+          ? "content_filtered"
+          : "response_truncated";
+        const errorMessage = isEmptyResponse
+          ? "AI returned empty response"
+          : finishReason === "content_filter"
+          ? "AI response was filtered due to content policy"
+          : "AI response was truncated due to token limit";
+
+        opts.observa.trackError({
+          errorType: errorType,
+          errorMessage: errorMessage,
+          stackTrace: null,
+          context: {
+            request: sanitizedReq,
+            response: sanitizedRes,
+            model: sanitizedReq.model || sanitizedRes.model || "unknown",
+            input: inputText,
+            finish_reason: finishReason,
+            provider: provider || "vercel-ai",
+            duration_ms: duration,
+          },
+          errorCategory:
+            finishReason === "content_filter"
+              ? "validation_error"
+              : finishReason === "length" || finishReason === "max_tokens"
+              ? "model_error"
+              : "unknown_error",
+          errorCode: isEmptyResponse ? "empty_response" : finishReason,
+        });
+
+        // Don't record as successful trace
+        return;
+      }
+
+      // Normal successful response - continue with existing logic
       // Extract usage
       const usage = sanitizedRes.usage || {};
       const inputTokens = usage.promptTokens || usage.inputTokens || null;
@@ -484,7 +643,7 @@ function recordTrace(
         latencyMs: duration,
         timeToFirstTokenMs: timeToFirstToken || null,
         streamingDurationMs: streamingDuration || null,
-        finishReason: sanitizedRes.finishReason || null,
+        finishReason: finishReason,
         responseId: sanitizedRes.responseId || sanitizedRes.id || null,
         operationName: "generate_text",
         providerName: provider || "vercel-ai",
@@ -517,8 +676,17 @@ function recordError(
     console.error("[Observa] ⚠️ Error Captured:", error?.message || error);
     const sanitizedReq = opts?.redact ? opts.redact(req) : req;
 
-    if (opts?.observa) {
-      // Use pre-extracted model identifier if available, otherwise extract from request
+    // CRITICAL: Validate that observa instance is provided
+    if (!opts?.observa) {
+      console.error(
+        "[Observa] ⚠️ CRITICAL: observa instance not provided to observeVercelAI(). " +
+          "Error tracking is disabled. Make sure you're using observa.observeVercelAI() " +
+          "instead of importing observeVercelAI directly from 'observa-sdk/instrumentation'."
+      );
+      return; // Silently fail (don't crash user's app)
+    }
+
+    // Use pre-extracted model identifier if available, otherwise extract from request
       const model = sanitizedReq.model || "unknown";
 
       // Use pre-extracted input text if available (extracted before operation), otherwise extract now
@@ -628,6 +796,25 @@ export function observeVercelAI(
   [key: string]: any;
 } {
   try {
+    // CRITICAL: Warn if observa instance is not provided
+    // This is the most common mistake - users importing observeVercelAI directly
+    if (!options?.observa) {
+      console.error(
+        "[Observa] ⚠️ CRITICAL ERROR: observa instance not provided!\n" +
+          "\n" +
+          "Tracking will NOT work. You must use observa.observeVercelAI() instead.\n" +
+          "\n" +
+          "❌ WRONG (importing directly):\n" +
+          "  import { observeVercelAI } from 'observa-sdk/instrumentation';\n" +
+          "  const ai = observeVercelAI({ generateText, streamText });\n" +
+          "\n" +
+          "✅ CORRECT (using instance method):\n" +
+          "  import { init } from 'observa-sdk';\n" +
+          "  const observa = init({ apiKey: '...' });\n" +
+          "  const ai = observa.observeVercelAI({ generateText, streamText });\n"
+      );
+    }
+
     const wrapped: any = { ...aiSdk };
 
     // Wrap generateText if available

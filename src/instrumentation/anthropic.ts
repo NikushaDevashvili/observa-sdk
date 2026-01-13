@@ -61,6 +61,25 @@ export function observeAnthropic(
     return proxyCache.get(client);
   }
 
+  // CRITICAL: Warn if observa instance is not provided
+  // This is the most common mistake - users importing observeAnthropic directly
+  if (!options?.observa) {
+    console.error(
+      "[Observa] ⚠️ CRITICAL ERROR: observa instance not provided!\n" +
+        "\n" +
+        "Tracking will NOT work. You must use observa.observeAnthropic() instead.\n" +
+        "\n" +
+        "❌ WRONG (importing directly):\n" +
+        "  import { observeAnthropic } from 'observa-sdk/instrumentation';\n" +
+        "  const wrapped = observeAnthropic(anthropic);\n" +
+        "\n" +
+        "✅ CORRECT (using instance method):\n" +
+        "  import { init } from 'observa-sdk';\n" +
+        "  const observa = init({ apiKey: '...' });\n" +
+        "  const wrapped = observa.observeAnthropic(anthropic);\n"
+    );
+  }
+
   try {
     const wrapped = new Proxy(client, {
       get(target, prop, receiver) {
@@ -138,7 +157,7 @@ async function traceAnthropicCall(
       // Wrap stream to capture data without blocking TTFT
       return wrapStream(
         result,
-        (fullResponse) => {
+        (fullResponse: any) => {
           // Stream completed -> Send Trace to Observa
           recordTrace(
             requestParams,
@@ -149,7 +168,7 @@ async function traceAnthropicCall(
             fullResponse.streamingDuration
           );
         },
-        (err) =>
+        (err: any) =>
           recordError(
             requestParams,
             err,
@@ -201,8 +220,18 @@ function recordTrace(
     const sanitizedReq = opts?.redact ? opts.redact(req) : req;
     const sanitizedRes = opts?.redact ? opts.redact(res) : res;
 
+    // CRITICAL: Validate that observa instance is provided
+    if (!opts?.observa) {
+      console.error(
+        "[Observa] ⚠️ CRITICAL: observa instance not provided to observeAnthropic(). " +
+          "Tracking is disabled. Make sure you're using observa.observeAnthropic() " +
+          "instead of importing observeAnthropic directly from 'observa-sdk/instrumentation'."
+      );
+      return; // Silently fail (don't crash user's app)
+    }
+
     // Use Observa instance if provided
-    if (opts?.observa) {
+    if (opts.observa) {
       // Extract input text from messages
       const inputText =
         sanitizedReq.messages
@@ -225,8 +254,72 @@ function recordTrace(
           ?.map((c: any) => c.text)
           .filter(Boolean)
           .join("\n") || null;
+      
+      // Extract stop reason (Anthropic's equivalent of finish_reason)
+      const stopReason = sanitizedRes?.stop_reason || null;
+      
+      // CRITICAL FIX: Detect empty responses
+      const isEmptyResponse = !outputText || (typeof outputText === 'string' && outputText.trim().length === 0);
+      
+      // CRITICAL FIX: Detect failure stop reasons (Anthropic uses stop_sequence for content filter, max_tokens for length)
+      const isFailureStopReason = stopReason === 'stop_sequence' || stopReason === 'max_tokens';
+      
+      // If response is empty or has failure stop reason, record as error
+      if (isEmptyResponse || isFailureStopReason) {
+        // Record LLM call with null output to show the attempt
+        opts.observa.trackLLMCall({
+          model: sanitizedReq.model || sanitizedRes?.model || "unknown",
+          input: inputText,
+          output: null, // No output on error
+          inputMessages: sanitizedReq.messages || null,
+          outputMessages: null,
+          inputTokens: sanitizedRes?.usage?.input_tokens || null,
+          outputTokens: sanitizedRes?.usage?.output_tokens || null,
+          totalTokens:
+            (sanitizedRes?.usage?.input_tokens || 0) +
+              (sanitizedRes?.usage?.output_tokens || 0) || null,
+          latencyMs: duration,
+          timeToFirstTokenMs: timeToFirstToken || null,
+          streamingDurationMs: streamingDuration || null,
+          finishReason: stopReason,
+          responseId: sanitizedRes?.id || null,
+          operationName: "chat",
+          providerName: "anthropic",
+          responseModel: sanitizedRes?.model || sanitizedReq.model || null,
+          temperature: sanitizedReq.temperature || null,
+          maxTokens: sanitizedReq.max_tokens || null,
+        });
 
-      // Use existing trackLLMCall method
+        // Record error event with appropriate error type
+        const errorType = isEmptyResponse ? "empty_response" : (stopReason === 'stop_sequence' ? "content_filtered" : "response_truncated");
+        const errorMessage = isEmptyResponse 
+          ? "AI returned empty response" 
+          : (stopReason === 'stop_sequence' 
+            ? "AI response was filtered due to content policy" 
+            : "AI response was truncated due to token limit");
+        
+        opts.observa.trackError({
+          errorType: errorType,
+          errorMessage: errorMessage,
+          stackTrace: null,
+          context: {
+            request: sanitizedReq,
+            response: sanitizedRes,
+            model: sanitizedReq.model || sanitizedRes?.model || "unknown",
+            input: inputText,
+            stop_reason: stopReason,
+            provider: "anthropic",
+            duration_ms: duration,
+          },
+          errorCategory: stopReason === 'stop_sequence' ? "validation_error" : (stopReason === 'max_tokens' ? "model_error" : "unknown_error"),
+          errorCode: isEmptyResponse ? "empty_response" : stopReason,
+        });
+        
+        // Don't record as successful trace
+        return;
+      }
+
+      // Normal successful response - continue with existing logic
       opts.observa.trackLLMCall({
         model: sanitizedReq.model || sanitizedRes?.model || "unknown",
         input: inputText,
@@ -241,7 +334,7 @@ function recordTrace(
         latencyMs: duration,
         timeToFirstTokenMs: timeToFirstToken || null,
         streamingDurationMs: streamingDuration || null,
-        finishReason: sanitizedRes?.stop_reason || null,
+        finishReason: stopReason,
         responseId: sanitizedRes?.id || null,
         operationName: "chat",
         providerName: "anthropic",
@@ -277,8 +370,18 @@ function recordError(
     // Sanitize request with redact hook
     const sanitizedReq = opts?.redact ? opts.redact(req) : req;
 
+    // CRITICAL: Validate that observa instance is provided
+    if (!opts?.observa) {
+      console.error(
+        "[Observa] ⚠️ CRITICAL: observa instance not provided to observeAnthropic(). " +
+          "Error tracking is disabled. Make sure you're using observa.observeAnthropic() " +
+          "instead of importing observeAnthropic directly from 'observa-sdk/instrumentation'."
+      );
+      return; // Silently fail (don't crash user's app)
+    }
+
     // Use Observa instance if provided
-    if (opts?.observa) {
+    if (opts.observa) {
       // Use pre-extracted model if available, otherwise extract from request
       const model = preExtractedModel || sanitizedReq.model || "unknown";
 

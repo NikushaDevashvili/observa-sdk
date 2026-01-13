@@ -300,6 +300,8 @@ interface CanonicalEvent {
       // TIER 2: Conversation grouping
       conversation_id_otel?: string | null;
       choice_count?: number | null;
+      // CRITICAL: Status field to mark errors (backend will use this to set span status)
+      status?: "success" | "error" | null;
     };
     tool_call?: {
       tool_name: string;
@@ -942,6 +944,15 @@ export class Observa {
     // Auto-infer operation name if not provided
     const operationName = options.operationName || "chat";
 
+    // CRITICAL FIX: Mark span as error if output is null (empty response)
+    const isError =
+      options.output === null ||
+      (typeof options.output === "string" &&
+        options.output.trim().length === 0) ||
+      options.finishReason === "content_filter" ||
+      options.finishReason === "length" ||
+      options.finishReason === "max_tokens";
+
     this.addEvent({
       event_type: "llm_call",
       span_id: spanId,
@@ -986,6 +997,8 @@ export class Observa {
           // TIER 2: Conversation grouping
           conversation_id_otel: options.conversationIdOtel || null,
           choice_count: options.choiceCount || null,
+          // CRITICAL: Status field to mark errors (backend will use this to set span status)
+          status: isError ? "error" : "success",
         },
       },
     });

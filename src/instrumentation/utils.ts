@@ -143,13 +143,49 @@ export async function* wrapStream<T>(
     let fullResponse: any;
     if (provider === 'openai') {
       fullResponse = reconstructOpenAIResponse(chunks);
+      // CRITICAL FIX: Check if response is empty or null
+      if (!fullResponse || !fullResponse.choices?.[0]?.message?.content || 
+          (typeof fullResponse.choices[0].message.content === 'string' && 
+           fullResponse.choices[0].message.content.trim().length === 0)) {
+        onError({
+          name: 'EmptyResponseError',
+          message: 'AI returned empty response',
+          errorType: 'empty_response',
+          errorCategory: 'model_error',
+          chunks: chunks.length,
+        });
+        return; // Don't call onComplete for empty responses
+      }
     } else if (provider === 'anthropic') {
       fullResponse = reconstructAnthropicResponse(chunks);
+      // CRITICAL FIX: Check if response is empty or null
+      if (!fullResponse || !fullResponse.content || 
+          !fullResponse.content.some((c: any) => c.text && c.text.trim().length > 0)) {
+        onError({
+          name: 'EmptyResponseError',
+          message: 'AI returned empty response',
+          errorType: 'empty_response',
+          errorCategory: 'model_error',
+          chunks: chunks.length,
+        });
+        return; // Don't call onComplete for empty responses
+      }
     } else if (provider === 'vercel-ai') {
       // Vercel AI SDK: chunks are strings, combine them
       const fullText = chunks
         .map((chunk: any) => (typeof chunk === 'string' ? chunk : chunk?.textDelta || ''))
         .join('');
+      // CRITICAL FIX: Check if response is empty
+      if (!fullText || fullText.trim().length === 0) {
+        onError({
+          name: 'EmptyResponseError',
+          message: 'AI returned empty response',
+          errorType: 'empty_response',
+          errorCategory: 'model_error',
+          chunks: chunks.length,
+        });
+        return; // Don't call onComplete for empty responses
+      }
       fullResponse = {
         text: fullText,
         tokenCount,
