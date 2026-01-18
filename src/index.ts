@@ -997,6 +997,29 @@ export class Observa {
       options.finishReason === "length" ||
       options.finishReason === "max_tokens";
 
+    // CRITICAL FIX: Ensure input is always a string or null, never an object
+    // This prevents "[object Object]" from appearing in the data
+    let normalizedInput: string | null = null;
+    if (options.input !== null && options.input !== undefined) {
+      if (typeof options.input === "string") {
+        normalizedInput = options.input;
+      } else {
+        // If input is an object, stringify it
+        try {
+          normalizedInput = JSON.stringify(options.input);
+        } catch {
+          normalizedInput = String(options.input);
+        }
+      }
+    } else if (options.inputMessages && options.inputMessages.length > 0) {
+      // Fallback: if input is null but we have messages, stringify them
+      try {
+        normalizedInput = JSON.stringify(options.inputMessages);
+      } catch {
+        normalizedInput = null;
+      }
+    }
+
     this.addEvent({
       ...(options.traceId ? { trace_id: options.traceId } : {}),
       event_type: "llm_call",
@@ -1004,7 +1027,7 @@ export class Observa {
       attributes: {
         llm_call: {
           model: options.model,
-          input: options.input || null,
+          input: normalizedInput,
           output: options.output || null,
           input_tokens: options.inputTokens || null,
           output_tokens: options.outputTokens || null,

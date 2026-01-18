@@ -187,6 +187,41 @@ function extractMessageText(message: any): string {
   return message.text || "";
 }
 
+/**
+ * Extract only new messages from a conversation (last user message + any messages after it)
+ * This prevents duplicating the full conversation history in each trace.
+ * 
+ * Example:
+ * - Full conversation: [user1, assistant1, tool1, user2, assistant2, user3]
+ * - Returns: [user3] (only the new user message)
+ * 
+ * If there are assistant/tool responses after the last user message, include those too:
+ * - Full conversation: [user1, assistant1, user2, assistant2, tool2]
+ * - Returns: [user2, assistant2, tool2] (new user message + responses in this call)
+ */
+function extractNewMessages(messages: any[]): any[] {
+  if (!messages || messages.length === 0) return [];
+  
+  // Find the last user message index
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") {
+      lastUserIndex = i;
+      break;
+    }
+  }
+  
+  // If we found a user message, return from that message onwards
+  // This includes: last user message + any assistant/tool responses after it
+  if (lastUserIndex >= 0) {
+    return messages.slice(lastUserIndex);
+  }
+  
+  // Fallback: if no user message found, return the last message (might be assistant/tool)
+  // This handles edge cases where conversation starts with assistant message
+  return messages.slice(-1);
+}
+
 function extractOutputMessages(res: any): any[] | null {
   const candidates = [
     res?.messages,
@@ -978,8 +1013,12 @@ async function traceGenerateText(
           : JSON.stringify(requestParams.prompt);
     }
   } else if (requestParams.messages) {
-    inputMessages = requestParams.messages;
-    inputText = requestParams.messages
+    // Extract only new messages (last user message + any messages after it)
+    // This prevents duplicating the full conversation history in each trace
+    const normalizedMessages = normalizeMessages(requestParams.messages);
+    inputMessages = extractNewMessages(normalizedMessages);
+    // But still extract full text from all messages for inputText (for token counting)
+    inputText = normalizedMessages
       .map((m: any) => {
         // Handle string content
         if (typeof m.content === "string") return m.content;
@@ -1096,7 +1135,8 @@ async function traceGenerateText(
 function wrapReadableStream(
   stream: ReadableStream<Uint8Array>,
   onComplete: (fullData: any) => void | Promise<void>,
-  onError: (error: any) => void
+  onError: (error: any) => void,
+  allowEmptyResponse?: () => boolean
 ): ReadableStream<Uint8Array> {
   // Use tee() to split the stream - one for user, one for tracking
   const [userStream, trackingStream] = stream.tee();
@@ -1205,16 +1245,19 @@ function wrapReadableStream(
           chunks: chunks.length,
           fullTextLength: fullText?.length || 0,
         });
-        onError({
-          name: "EmptyResponseError",
-          message:
-            "AI returned empty response. This usually indicates an error occurred during stream processing. Check server logs for the actual error details (the error may have been thrown during stream consumption and not captured by instrumentation).",
-          errorType: "empty_response",
-          errorCategory: "model_error",
-          chunks: chunks.length,
-          fullText: fullText || "",
-        });
-        return; // Don't call onComplete for empty responses
+        const shouldAllowEmpty = allowEmptyResponse ? allowEmptyResponse() : false;
+        if (!shouldAllowEmpty) {
+          onError({
+            name: "EmptyResponseError",
+            message:
+              "AI returned empty response. This usually indicates an error occurred during stream processing. Check server logs for the actual error details (the error may have been thrown during stream consumption and not captured by instrumentation).",
+            errorType: "empty_response",
+            errorCategory: "model_error",
+            chunks: chunks.length,
+            fullText: fullText || "",
+          });
+          return; // Don't call onComplete for empty responses
+        }
       }
 
       // Call onComplete - handle both sync and async callbacks
@@ -1334,8 +1377,12 @@ async function traceStreamText(
           : JSON.stringify(requestParams.prompt);
     }
   } else if (requestParams.messages) {
-    inputMessages = requestParams.messages;
-    inputText = requestParams.messages
+    // Extract only new messages (last user message + any messages after it)
+    // This prevents duplicating the full conversation history in each trace
+    const normalizedMessages = normalizeMessages(requestParams.messages);
+    inputMessages = extractNewMessages(normalizedMessages);
+    // But still extract full text from all messages for inputText (for token counting)
+    inputText = normalizedMessages
       .map((m: any) => extractMessageText(m))
       .filter(Boolean)
       .join("\n");
@@ -1738,7 +1785,8 @@ async function traceStreamText(
               traceStarted,
               toolCallBuffer,
               traceIdForRequest
-            )
+            ),
+          () => toolCallBuffer.length > 0
         );
 
         // Return result with wrapped stream - preserve all original properties and methods
@@ -2033,27 +2081,36 @@ function recordTrace(
       
       // Tools schema (if available)
       if (req.tools) {
-        // Normalize tools to array format
-        let toolsArray: any[] = [];
+        // Normalize tools to array format, preserving tool names from object keys
+        let toolsArray: Array<{ tool: any; name?: string }> = [];
         if (Array.isArray(req.tools)) {
-          toolsArray = req.tools;
+          toolsArray = req.tools.map((tool: any) => ({ tool }));
         } else if (typeof req.tools === 'object') {
-          // Convert object/map to array
+          // Convert object/map to array, preserving key names
           if (req.tools instanceof Map) {
-            toolsArray = Array.from(req.tools.values());
+            // For Map, preserve key names
+            const mapEntries: Array<[any, any]> = Array.from(req.tools.entries());
+            toolsArray = mapEntries.map(([key, value]: [any, any]) => ({
+              tool: value,
+              name: String(key), // Use key as name
+            }));
           } else {
-            toolsArray = Object.values(req.tools);
+            // For object, preserve key names
+            toolsArray = Object.entries(req.tools).map(([key, value]: [string, any]) => ({
+              tool: value,
+              name: key, // Use key as name
+            }));
           }
         }
         
         // Extract tool schemas (matching OTEL ai.prompt.tools format)
-        metadata.tools = toolsArray.map((tool: any) => {
+        metadata.tools = toolsArray.map(({ tool, name: keyName }) => {
           // Handle different tool formats
           if (typeof tool === 'function') {
             // Function-based tool - try to extract schema if available
             return {
               type: "function",
-              name: tool.name || "unknown",
+              name: tool.name || keyName || "unknown",
               description: tool.description || null,
               inputSchema: tool.parameters || tool.schema || {},
             };
@@ -2061,25 +2118,28 @@ function recordTrace(
             // Object-based tool definition
             return {
               type: tool.type || "function",
-              name: tool.name || tool.function?.name || "unknown",
+              name: tool.name || tool.function?.name || keyName || "unknown",
               description: tool.description || tool.function?.description || null,
               inputSchema: tool.parameters || tool.schema || tool.inputSchema || tool.function?.parameters || {},
             };
           }
-          return tool;
+          return {
+            type: "function",
+            name: keyName || "unknown",
+            description: null,
+            inputSchema: {},
+          };
         });
         
-        // Also add in OTEL format (as JSON string to match Langfuse)
+        // Also add in OTEL format (store as object, will be serialized when event is sent)
         if (metadata.tools.length > 0) {
-          metadata['ai.prompt.tools'] = JSON.stringify(metadata.tools);
+          metadata['ai.prompt.tools'] = metadata.tools;
         }
       }
       
       // Tool choice
       if (req.toolChoice !== undefined) {
-        metadata['ai.prompt.toolChoice'] = typeof req.toolChoice === 'object' 
-          ? JSON.stringify(req.toolChoice)
-          : String(req.toolChoice);
+        metadata['ai.prompt.toolChoice'] = req.toolChoice;
         metadata.toolChoice = req.toolChoice;
       }
       
@@ -2088,9 +2148,7 @@ function recordTrace(
         metadata['ai.settings.maxRetries'] = String(req.maxRetries);
       }
       if (req.retry !== undefined) {
-        metadata['ai.settings.retry'] = typeof req.retry === 'object' 
-          ? JSON.stringify(req.retry)
-          : String(req.retry);
+        metadata['ai.settings.retry'] = req.retry;
       }
       
       // Additional request parameters
@@ -2153,9 +2211,12 @@ function recordTrace(
             : JSON.stringify(sanitizedReq.prompt);
       }
     }
+    // Extract only new messages (last user message + any messages after it)
+    // This prevents duplicating the full conversation history in each trace
+    const allMessages = normalizeMessages(sanitizedReq.messages);
     const inputMessages =
-      normalizeMessages(sanitizedReq.messages).length > 0
-        ? normalizeMessages(sanitizedReq.messages)
+      allMessages.length > 0
+        ? extractNewMessages(allMessages)
         : sanitizedReq.prompt
         ? [
             {
@@ -2225,10 +2286,34 @@ function recordTrace(
     // Extract finish reason
     const finishReason = sanitizedRes.finishReason || null;
 
+    const hasToolCallsInMessages = (messages: any): boolean => {
+      if (!Array.isArray(messages)) return false;
+      return messages.some((message) => {
+        if (!message) return false;
+        if (message.role === "tool") return true;
+        if (message.tool_call_id || message.toolCallId) return true;
+        if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+          return true;
+        }
+        if (Array.isArray(message.content)) {
+          return message.content.some(
+            (item: any) =>
+              item?.type === "tool_call" || item?.type === "tool_result"
+          );
+        }
+        return false;
+      });
+    };
+
+    const hasToolCalls =
+      (toolCallBuffer && toolCallBuffer.length > 0) ||
+      hasToolCallsInMessages(outputMessages);
+
     // CRITICAL FIX: Detect empty responses
     const isEmptyResponse =
       !outputText ||
       (typeof outputText === "string" && outputText.trim().length === 0);
+    const shouldTreatEmptyAsError = isEmptyResponse && !hasToolCalls;
 
     // CRITICAL FIX: Detect failure finish reasons
     const isFailureFinishReason =
@@ -2237,7 +2322,7 @@ function recordTrace(
       finishReason === "max_tokens";
 
     // If response is empty or has failure finish reason, record as error
-    if (isEmptyResponse || isFailureFinishReason) {
+    if (shouldTreatEmptyAsError || isFailureFinishReason) {
       // Extract usage
       const usage = sanitizedRes.usage || {};
       const inputTokens = usage.promptTokens || usage.inputTokens || null;
@@ -2301,12 +2386,12 @@ function recordTrace(
       });
 
       // Record error event with appropriate error type
-      const errorType = isEmptyResponse
+      const errorType = shouldTreatEmptyAsError
         ? "empty_response"
         : finishReason === "content_filter"
         ? "content_filtered"
         : "response_truncated";
-      const errorMessage = isEmptyResponse
+      const errorMessage = shouldTreatEmptyAsError
         ? "AI returned empty response"
         : finishReason === "content_filter"
         ? "AI response was filtered due to content policy"
@@ -2331,7 +2416,7 @@ function recordTrace(
             : finishReason === "length" || finishReason === "max_tokens"
             ? "model_error"
             : "unknown_error",
-        errorCode: isEmptyResponse ? "empty_response" : finishReason,
+        errorCode: shouldTreatEmptyAsError ? "empty_response" : finishReason,
       });
 
       if (traceStarted && opts?.observa?.endTrace) {
@@ -2738,8 +2823,12 @@ function recordError(
             ? sanitizedReq.prompt
             : JSON.stringify(sanitizedReq.prompt);
       } else if (sanitizedReq.messages) {
-        inputMessages = sanitizedReq.messages;
-        inputText = sanitizedReq.messages
+        // Extract only new messages (last user message + any messages after it)
+        // This prevents duplicating the full conversation history in each trace
+        const normalizedMessages = normalizeMessages(sanitizedReq.messages);
+        inputMessages = extractNewMessages(normalizedMessages);
+        // But still extract full text from all messages for inputText (for token counting)
+        inputText = normalizedMessages
           .map((m: any) => {
             // Handle string content
             if (typeof m.content === "string") return m.content;
@@ -2768,27 +2857,36 @@ function recordError(
       
       // Tools schema (if available)
       if (req.tools) {
-        // Normalize tools to array format
-        let toolsArray: any[] = [];
+        // Normalize tools to array format, preserving tool names from object keys
+        let toolsArray: Array<{ tool: any; name?: string }> = [];
         if (Array.isArray(req.tools)) {
-          toolsArray = req.tools;
+          toolsArray = req.tools.map((tool: any) => ({ tool }));
         } else if (typeof req.tools === 'object') {
-          // Convert object/map to array
+          // Convert object/map to array, preserving key names
           if (req.tools instanceof Map) {
-            toolsArray = Array.from(req.tools.values());
+            // For Map, preserve key names
+            const mapEntries: Array<[any, any]> = Array.from(req.tools.entries());
+            toolsArray = mapEntries.map(([key, value]: [any, any]) => ({
+              tool: value,
+              name: String(key), // Use key as name
+            }));
           } else {
-            toolsArray = Object.values(req.tools);
+            // For object, preserve key names
+            toolsArray = Object.entries(req.tools).map(([key, value]: [string, any]) => ({
+              tool: value,
+              name: key, // Use key as name
+            }));
           }
         }
         
         // Extract tool schemas (matching OTEL ai.prompt.tools format)
-        metadata.tools = toolsArray.map((tool: any) => {
+        metadata.tools = toolsArray.map(({ tool, name: keyName }) => {
           // Handle different tool formats
           if (typeof tool === 'function') {
             // Function-based tool - try to extract schema if available
             return {
               type: "function",
-              name: tool.name || "unknown",
+              name: tool.name || keyName || "unknown",
               description: tool.description || null,
               inputSchema: tool.parameters || tool.schema || {},
             };
@@ -2796,25 +2894,28 @@ function recordError(
             // Object-based tool definition
             return {
               type: tool.type || "function",
-              name: tool.name || tool.function?.name || "unknown",
+              name: tool.name || tool.function?.name || keyName || "unknown",
               description: tool.description || tool.function?.description || null,
               inputSchema: tool.parameters || tool.schema || tool.inputSchema || tool.function?.parameters || {},
             };
           }
-          return tool;
+          return {
+            type: "function",
+            name: keyName || "unknown",
+            description: null,
+            inputSchema: {},
+          };
         });
         
-        // Also add in OTEL format (as JSON string to match Langfuse)
+        // Also add in OTEL format (store as object, will be serialized when event is sent)
         if (metadata.tools.length > 0) {
-          metadata['ai.prompt.tools'] = JSON.stringify(metadata.tools);
+          metadata['ai.prompt.tools'] = metadata.tools;
         }
       }
       
       // Tool choice
       if (req.toolChoice !== undefined) {
-        metadata['ai.prompt.toolChoice'] = typeof req.toolChoice === 'object' 
-          ? JSON.stringify(req.toolChoice)
-          : String(req.toolChoice);
+        metadata['ai.prompt.toolChoice'] = req.toolChoice;
         metadata.toolChoice = req.toolChoice;
       }
       
@@ -2823,9 +2924,7 @@ function recordError(
         metadata['ai.settings.maxRetries'] = String(req.maxRetries);
       }
       if (req.retry !== undefined) {
-        metadata['ai.settings.retry'] = typeof req.retry === 'object' 
-          ? JSON.stringify(req.retry)
-          : String(req.retry);
+        metadata['ai.settings.retry'] = req.retry;
       }
       
       // Additional request parameters
