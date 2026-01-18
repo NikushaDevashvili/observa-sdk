@@ -444,6 +444,37 @@ function attachFeedbackHelpers(
   }).catch(() => {});
   // #endregion
 
+  // Convenience methods for like/dislike feedback
+  const like =
+    submitFeedback
+      ? (opts?: {
+          comment?: string;
+          conversationId?: string;
+          sessionId?: string;
+          userId?: string;
+        }) =>
+          submitFeedback({
+            type: "like",
+            outcome: "success",
+            ...opts,
+          })
+      : undefined;
+
+  const dislike =
+    submitFeedback
+      ? (opts?: {
+          comment?: string;
+          conversationId?: string;
+          sessionId?: string;
+          userId?: string;
+        }) =>
+          submitFeedback({
+            type: "dislike",
+            outcome: "failure",
+            ...opts,
+          })
+      : undefined;
+
   target.observa = {
     ...(target.observa || {}),
     traceId,
@@ -451,6 +482,8 @@ function attachFeedbackHelpers(
     responseId: traceInfo.responseId ?? null,
     model: traceInfo.model ?? null,
     submitFeedback,
+    like,
+    dislike,
   };
 }
 

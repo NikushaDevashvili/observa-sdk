@@ -1390,6 +1390,56 @@ export class Observa {
   }
 
   /**
+   * Convenience method to track "like" feedback
+   * Shortcut for trackFeedback({ type: "like", outcome: "success", ... })
+   */
+  like(options?: {
+    comment?: string;
+    conversationId?: string;
+    sessionId?: string;
+    userId?: string;
+    messageIndex?: number;
+    parentMessageId?: string;
+    agentName?: string;
+    version?: string;
+    route?: string;
+    parentSpanId?: string | null;
+    spanId?: string;
+    traceId?: string | null;
+  }): string {
+    return this.trackFeedback({
+      type: "like",
+      outcome: "success",
+      ...options,
+    });
+  }
+
+  /**
+   * Convenience method to track "dislike" feedback
+   * Shortcut for trackFeedback({ type: "dislike", outcome: "failure", ... })
+   */
+  dislike(options?: {
+    comment?: string;
+    conversationId?: string;
+    sessionId?: string;
+    userId?: string;
+    messageIndex?: number;
+    parentMessageId?: string;
+    agentName?: string;
+    version?: string;
+    route?: string;
+    parentSpanId?: string | null;
+    spanId?: string;
+    traceId?: string | null;
+  }): string {
+    return this.trackFeedback({
+      type: "dislike",
+      outcome: "failure",
+      ...options,
+    });
+  }
+
+  /**
    * Track final output
    */
   trackOutput(options: {

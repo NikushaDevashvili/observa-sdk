@@ -41,6 +41,8 @@ const observa = init({
 
 ## Quick Start
 
+> **📊 Automatic Feedback Tracking**: When using `observeVercelAI()`, all responses automatically include feedback helpers (`result.observa.like()` and `result.observa.dislike()`). No additional setup needed - just add UI buttons! See the [Feedback](#collecting-user-feedback-like-dislike) section below.
+
 ### Auto-Capture with OpenAI (Recommended)
 
 The easiest way to track LLM calls is using the `observeOpenAI()` wrapper - it automatically captures 90%+ of your LLM interactions:
@@ -162,9 +164,14 @@ const stream = await ai.streamText({
 for await (const chunk of stream.textStream) {
   process.stdout.write(chunk);
 }
+
+// ✅ Feedback helpers are automatically available on result objects!
+// result.observa.like() and result.observa.dislike() are ready to use
 ```
 
 #### Next.js App Router Example
+
+> **💡 Feedback Ready**: Responses from `ai.streamText()` and `ai.generateText()` automatically include feedback helpers on `result.observa`. See [Collecting User Feedback](#collecting-user-feedback-like-dislike) section for UI examples.
 
 For Next.js applications, use the route handler pattern:
 
@@ -198,6 +205,7 @@ export async function POST(req: Request) {
 
 #### Client-Side with React (useChat Hook)
 
+**Basic Example:**
 ```typescript
 // app/page.tsx
 "use client";
@@ -221,6 +229,10 @@ export default function Chat() {
   );
 }
 ```
+
+**With Feedback Buttons:**
+
+To add like/dislike feedback, you'll need to expose the `traceId` and `spanId` from your API route and use `observa.trackFeedback()`. See the [Feedback](#collecting-user-feedback-like-dislike) section for complete examples.
 
 #### With Tools/Function Calling
 
@@ -301,6 +313,280 @@ const spanId = observa.trackLLMCall({
 ```
 
 See the [API Reference](#api-reference) section for all available methods.
+
+## Collecting User Feedback (Like/Dislike)
+
+**Feedback helpers are automatically attached** to response objects when using `observeVercelAI()`. No additional setup needed - just add UI buttons!
+
+### Automatic Feedback Helpers
+
+When you use `observa.observeVercelAI()`, all response objects automatically include feedback helpers:
+
+```typescript
+const result = await ai.generateText({
+  model: openai('gpt-4'),
+  prompt: 'What is the capital of France?',
+});
+
+// Feedback helpers are automatically available on result.observa
+result.observa.like();  // User liked the response
+result.observa.dislike({ comment: "Wrong answer" });  // User disliked with comment
+
+// All helpers have traceId and parentSpanId already bound - no manual linking needed!
+```
+
+### Server-Side Example (Node.js/API Route)
+
+In your API route or server handler:
+
+```typescript
+// app/api/chat/route.ts
+import { generateText } from "ai";
+import { init } from "observa-sdk";
+import { openai } from "@ai-sdk/openai";
+
+const observa = init({
+  apiKey: process.env.OBSERVA_API_KEY!,
+});
+
+const ai = observa.observeVercelAI({ generateText });
+
+export async function POST(req: Request) {
+  const { prompt } = await req.json();
+
+  const result = await ai.generateText({
+    model: openai('gpt-4'),
+    prompt,
+  });
+
+  // Return both the text and observa metadata for frontend feedback
+  return Response.json({
+    text: result.text,
+    // Expose observa metadata so frontend can submit feedback
+    observa: {
+      traceId: result.observa.traceId,
+      spanId: result.observa.spanId,
+      // Frontend can use these to call observa.trackFeedback()
+    },
+  });
+}
+```
+
+### Frontend Example (React)
+
+In your React component, collect feedback from users:
+
+```typescript
+// app/page.tsx
+"use client";
+import { useState } from "react";
+import { init } from "observa-sdk";
+
+const observa = init({
+  apiKey: process.env.NEXT_PUBLIC_OBSERVA_API_KEY!,
+});
+
+export default function Chat() {
+  const [responses, setResponses] = useState<Array<{
+    id: string;
+    text: string;
+    observa: { traceId: string | null; spanId: string };
+  }>>([]);
+
+  async function handleSubmit(prompt: string) {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    });
+    const data = await response.json();
+    
+    setResponses(prev => [...prev, {
+      id: Date.now().toString(),
+      text: data.text,
+      observa: data.observa,
+    }]);
+  }
+
+  function handleFeedback(responseId: string, type: 'like' | 'dislike', comment?: string) {
+    const response = responses.find(r => r.id === responseId);
+    if (!response?.observa.traceId) return;
+
+    // Use trackFeedback with traceId and parentSpanId from the response
+    observa.trackFeedback({
+      type,
+      traceId: response.observa.traceId,
+      parentSpanId: response.observa.spanId,
+      comment,
+    });
+  }
+
+  return (
+    <div>
+      {responses.map((response) => (
+        <div key={response.id}>
+          <p>{response.text}</p>
+          <div>
+            <button onClick={() => handleFeedback(response.id, 'like')}>
+              👍 Like
+            </button>
+            <button onClick={() => handleFeedback(response.id, 'dislike')}>
+              👎 Dislike
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+### Convenience Methods
+
+The SDK provides convenience methods for easier API:
+
+```typescript
+// Direct SDK usage
+observa.like({
+  traceId: "trace-123",
+  parentSpanId: "span-456",
+  userId: "user-789",
+});
+
+observa.dislike({
+  traceId: "trace-123",
+  parentSpanId: "span-456",
+  comment: "Incorrect information",
+  userId: "user-789",
+});
+```
+
+### Complete Next.js Example with Feedback
+
+Here's a complete working example:
+
+**Backend (`app/api/chat/route.ts`):**
+```typescript
+import { generateText } from "ai";
+import { init } from "observa-sdk";
+import { openai } from "@ai-sdk/openai";
+
+const observa = init({
+  apiKey: process.env.OBSERVA_API_KEY!,
+});
+
+const ai = observa.observeVercelAI({ generateText });
+
+export async function POST(req: Request) {
+  const { prompt } = await req.json();
+
+  const result = await ai.generateText({
+    model: openai('gpt-4'),
+    prompt,
+  });
+
+  return Response.json({
+    text: result.text,
+    observa: {
+      traceId: result.observa.traceId,
+      spanId: result.observa.spanId,
+    },
+  });
+}
+```
+
+**Frontend (`app/page.tsx`):**
+```typescript
+"use client";
+import { useState } from "react";
+import { init } from "observa-sdk";
+
+const observa = init({
+  apiKey: process.env.NEXT_PUBLIC_OBSERVA_API_KEY!,
+});
+
+export default function Chat() {
+  const [messages, setMessages] = useState<Array<{
+    id: string;
+    text: string;
+    observa?: { traceId: string | null; spanId: string };
+  }>>([]);
+  const [input, setInput] = useState("");
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const prompt = input;
+    setInput("");
+
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    const data = await response.json();
+    
+    setMessages(prev => [...prev, {
+      id: Date.now().toString(),
+      text: data.text,
+      observa: data.observa,
+    }]);
+  }
+
+  function handleFeedback(messageId: string, type: 'like' | 'dislike', comment?: string) {
+    const message = messages.find(m => m.id === messageId);
+    if (!message?.observa?.traceId) return;
+
+    if (type === 'like') {
+      observa.like({
+        traceId: message.observa.traceId,
+        parentSpanId: message.observa.spanId,
+      });
+    } else {
+      observa.dislike({
+        traceId: message.observa.traceId,
+        parentSpanId: message.observa.spanId,
+        comment,
+      });
+    }
+  }
+
+  return (
+    <div>
+      {messages.map((message) => (
+        <div key={message.id}>
+          <p>{message.text}</p>
+          {message.observa && (
+            <div>
+              <button onClick={() => handleFeedback(message.id, 'like')}>
+                👍 Like
+              </button>
+              <button onClick={() => handleFeedback(message.id, 'dislike')}>
+                👎 Dislike
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+      <form onSubmit={handleSubmit}>
+        <input 
+          value={input} 
+          onChange={(e) => setInput(e.target.value)} 
+          placeholder="Ask a question..."
+        />
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  );
+}
+```
+
+**Key Points:**
+- ✅ Feedback helpers are automatically attached to response objects
+- ✅ `traceId` and `parentSpanId` are already bound - no manual linking needed
+- ✅ Expose `result.observa.traceId` and `result.observa.spanId` to your frontend
+- ✅ Use `observa.like()` or `observa.dislike()` on the frontend with the trace/span IDs
+- ✅ Feedback appears automatically in your Observa dashboard
+
+For more advanced feedback options (ratings, corrections, etc.), see the [Feedback API Reference](#observatrackfeedbackoptions) section.
 
 ## Multi-Tenant Architecture
 
@@ -703,6 +989,25 @@ Track user feedback (likes, dislikes, ratings, corrections) for AI interactions.
 
 #### Basic Like/Dislike Feedback
 
+**Using convenience methods (recommended):**
+
+```typescript
+// User clicks "like" button after receiving AI response
+const feedbackSpanId = observa.like({
+  conversationId: "conv-123",
+  userId: "user-456",
+});
+
+// User clicks "dislike" button
+observa.dislike({
+  comment: "The answer was incorrect",
+  conversationId: "conv-123",
+  userId: "user-456",
+});
+```
+
+**Or using trackFeedback directly:**
+
 ```typescript
 // User clicks "like" button after receiving AI response
 const feedbackSpanId = observa.trackFeedback({
@@ -721,6 +1026,92 @@ observa.trackFeedback({
   userId: "user-456",
 });
 ```
+
+#### Feedback with Vercel AI SDK (Automatic Helpers)
+
+**Feedback helpers are automatically attached to response objects:**
+
+```typescript
+import { generateText, streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const ai = observa.observeVercelAI({ generateText, streamText });
+
+// Generate a response
+const result = await ai.generateText({
+  model: openai('gpt-4'),
+  prompt: 'What is the capital of France?',
+});
+
+// Feedback helpers are automatically available on result.observa
+// No traceId or parentSpanId needed - automatically linked!
+
+// In your UI component - simple like/dislike buttons
+<button onClick={() => result.observa.like()}>
+  👍 Like
+</button>
+
+<button onClick={() => result.observa.dislike({ comment: "Wrong answer" })}>
+  👎 Dislike
+</button>
+
+// Or with more context
+result.observa.like({
+  userId: currentUser.id,
+  conversationId: currentConversation.id,
+});
+
+result.observa.dislike({
+  comment: "The capital is Paris, not Lyon",
+  userId: currentUser.id,
+});
+```
+
+#### React Component Example
+
+```typescript
+import { useState } from 'react';
+import { useChat } from '@ai-sdk/react';
+
+function ChatWithFeedback() {
+  const { messages, append, isLoading } = useChat({
+    api: '/api/chat', // Your API route that uses observa.observeVercelAI
+  });
+
+  const handleFeedback = async (messageId: string, type: 'like' | 'dislike') => {
+    // Get the message from your API response
+    // (traceId and spanId are automatically included in response if using instrumentation)
+    
+    // If using server actions or custom API:
+    await fetch('/api/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ messageId, type }),
+    });
+  };
+
+  return (
+    <div>
+      {messages.map((message) => (
+        <div key={message.id}>
+          <div>{message.content}</div>
+          {message.role === 'assistant' && (
+            <div>
+              <button onClick={() => handleFeedback(message.id, 'like')}>
+                👍 Like
+              </button>
+              <button onClick={() => handleFeedback(message.id, 'dislike')}>
+                👎 Dislike
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+**Note**: If you're using `observa.observeVercelAI()`, feedback helpers (`result.observa.like()` and `result.observa.dislike()`) are automatically attached to response objects. The `traceId` and `parentSpanId` are already bound, so you don't need to manage them manually - just call the methods directly!
 
 #### Rating Feedback (1-5 Scale)
 
@@ -772,7 +1163,14 @@ const llmSpanId = observa.trackLLMCall({
   // ... other LLM call data
 });
 
-// Link feedback directly to the LLM call span
+// Link feedback directly to the LLM call span using convenience method
+observa.like({
+  parentSpanId: llmSpanId, // Attach feedback to the specific LLM call
+  conversationId: "conv-123",
+  userId: "user-456",
+});
+
+// Or using trackFeedback directly
 observa.trackFeedback({
   type: "like",
   parentSpanId: llmSpanId, // Attach feedback to the specific LLM call
