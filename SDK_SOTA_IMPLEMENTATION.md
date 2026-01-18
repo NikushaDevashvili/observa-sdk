@@ -242,50 +242,6 @@ const spanId = observa.trackAgentCreate({
 
 ## Migration Guide
 
-### From Legacy `track()` to `trackLLMCall()`
-
-**Before:**
-
-```typescript
-await observa.track(
-  { query: "What is AI?", model: "gpt-4" },
-  () => fetch("https://api.openai.com/v1/chat/completions", {...})
-);
-```
-
-**After (Recommended):**
-
-```typescript
-const startTime = Date.now();
-const response = await openai.chat.completions.create({
-  model: "gpt-4-turbo",
-  messages: [{ role: "user", content: "What is AI?" }],
-  temperature: 0.7,
-  top_p: 0.9,
-  // ... other params
-});
-
-observa.trackLLMCall({
-  model: "gpt-4-turbo",
-  input: "What is AI?",
-  output: response.choices[0].message.content,
-  inputTokens: response.usage.prompt_tokens,
-  outputTokens: response.usage.completion_tokens,
-  totalTokens: response.usage.total_tokens,
-  latencyMs: Date.now() - startTime,
-  operationName: "chat",
-  providerName: "openai",
-  responseModel: response.model, // Actual model used
-  temperature: 0.7,
-  topP: 0.9,
-  inputMessages: [{ role: "user", content: "What is AI?" }],
-  outputMessages: [
-    { role: "assistant", content: response.choices[0].message.content },
-  ],
-  // ... all other OTEL parameters
-});
-```
-
 ### Updating Existing Code
 
 **1. Update `trackToolCall()` calls:**
@@ -517,17 +473,6 @@ try {
 
 ---
 
-## Backward Compatibility
-
-✅ **All changes are backward compatible:**
-
-- Existing `trackToolCall()`, `trackRetrieval()`, `trackError()` calls continue to work
-- New parameters are optional
-- Legacy `track()` method still works (with auto-inferred provider)
-- No breaking changes
-
----
-
 ## Testing
 
 ### Test All New Methods
@@ -581,5 +526,5 @@ const agentId = observa.trackAgentCreate({
 
 The SDK now tracks and sends **ALL** OTEL parameters required for 95% SOTA coverage. Every parameter from the backend implementation is available in the SDK methods.
 
-**Critical:** Developers must use the new methods (`trackLLMCall()`, `trackEmbedding()`, etc.) to send complete OTEL data. The legacy `track()` method will continue to work but won't send all OTEL parameters.
+**Critical:** Developers must use the new methods (`trackLLMCall()`, `trackEmbedding()`, etc.) to send complete OTEL data.
 

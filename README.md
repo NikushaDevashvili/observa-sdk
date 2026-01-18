@@ -282,25 +282,6 @@ try {
 }
 ```
 
-### Legacy Manual Tracking
-
-For more control, you can still use the manual `track()` method:
-
-```typescript
-// Track AI interactions with simple wrapping
-const response = await observa.track({ query: "What is the weather?" }, () =>
-  fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      /* ... */
-    },
-    body: JSON.stringify({
-      /* ... */
-    }),
-  })
-);
-```
-
 ### Manual Tracking (Advanced)
 
 For more control over what gets tracked, use the manual tracking methods:
@@ -694,44 +675,6 @@ Track errors with structured classification.
 **New Parameters:**
 - `errorCategory`: Error category
 - `errorCode`: Error code
-
-### `observa.track(event, action)`
-
-Track an AI interaction (legacy method, still supported).
-
-**Parameters**:
-
-- `event.query` (required): The user query/prompt
-- `event.context` (optional): Additional context
-- `event.model` (optional): Model identifier
-- `event.metadata` (optional): Custom metadata
-- `action`: Function that returns a `Promise<Response>` (typically a fetch call)
-
-**Returns**: `Promise<Response>` (the original response, unmodified)
-
-**Example**:
-
-```typescript
-const response = await observa.track(
-  {
-    query: "What is machine learning?",
-    model: "gpt-4",
-    metadata: { userId: "123" },
-  },
-  () =>
-    fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openaiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4",
-        messages: [{ role: "user", content: "What is machine learning?" }],
-      }),
-    })
-);
-```
 
 ### `observa.trackFeedback(options)`
 

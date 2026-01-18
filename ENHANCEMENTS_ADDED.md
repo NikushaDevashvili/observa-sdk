@@ -262,15 +262,6 @@ try {
 }
 ```
 
-## Backward Compatibility
-
-All existing functionality remains unchanged:
-
-- ✅ `observa.track()` method still works (automatic trace management)
-- ✅ Existing code continues to work without changes
-- ✅ Pretty logging in dev mode still works
-- ✅ All configuration options unchanged
-
 ## Implementation Details
 
 ### Span Hierarchy

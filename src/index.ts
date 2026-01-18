@@ -12,18 +12,6 @@ import { observeOpenAI as observeOpenAIFn } from "./instrumentation/openai.js";
 import { observeAnthropic as observeAnthropicFn } from "./instrumentation/anthropic.js";
 import { observeVercelAI as observeVercelAIFn } from "./instrumentation/vercel-ai.js";
 
-// Import context propagation (Node.js only)
-let contextModule: any = null;
-try {
-  // Dynamic import to handle browser environments
-  const requireFn = (globalThis as any).require;
-  if (typeof requireFn !== "undefined") {
-    contextModule = requireFn("./context.js");
-  }
-} catch {
-  // Context propagation not available (browser environment)
-}
-
 // Helper: safely access NODE_ENV without type issues
 function getNodeEnv(): string | undefined {
   try {
@@ -151,19 +139,6 @@ export interface ObservaInitConfig {
   mode?: "development" | "production";
   sampleRate?: number; // 0..1
   maxResponseChars?: number; // prevent giant payloads (default 50k)
-}
-
-export interface TrackEventInput {
-  query: string;
-  context?: string;
-  model?: string;
-  metadata?: Record<string, any>;
-  // Conversation tracking fields
-  conversationId?: string; // Long-lived conversation identifier
-  sessionId?: string; // Short-lived session identifier
-  userId?: string; // End-user identifier
-  messageIndex?: number; // Position in conversation (1, 2, 3...)
-  parentMessageId?: string; // For threaded conversations
 }
 
 interface TraceData {
@@ -413,67 +388,6 @@ interface CanonicalEvent {
   };
 }
 
-// ---------- SSE helpers (for OpenAI-style streamed chunks) ----------
-function parseSSEChunk(chunk: string): any {
-  const lines = chunk.split("\n");
-  for (const line of lines) {
-    if (!line.startsWith("data: ")) continue;
-    const payload = line.slice(6).trim();
-    if (payload === "[DONE]") return { done: true };
-    try {
-      return JSON.parse(payload);
-    } catch {
-      // ignore
-    }
-  }
-  return {};
-}
-
-function extractMetadataFromChunks(chunks: string[]): {
-  tokensPrompt?: number | null;
-  tokensCompletion?: number | null;
-  tokensTotal?: number | null;
-  model?: string | null;
-  finishReason?: string | null;
-  responseId?: string | null;
-  systemFingerprint?: string | null;
-} {
-  let tokensPrompt: number | null | undefined;
-  let tokensCompletion: number | null | undefined;
-  let tokensTotal: number | null | undefined;
-  let model: string | null | undefined;
-  let finishReason: string | null | undefined;
-  let responseId: string | null | undefined;
-  let systemFingerprint: string | null | undefined;
-
-  for (const chunk of chunks) {
-    const parsed = parseSSEChunk(chunk);
-    if (parsed?.usage) {
-      tokensPrompt = parsed.usage.prompt_tokens ?? tokensPrompt;
-      tokensCompletion = parsed.usage.completion_tokens ?? tokensCompletion;
-      tokensTotal = parsed.usage.total_tokens ?? tokensTotal;
-    }
-    if (parsed?.model && !model) model = parsed.model;
-    if (parsed?.id && !responseId) responseId = parsed.id;
-    if (parsed?.system_fingerprint && !systemFingerprint)
-      systemFingerprint = parsed.system_fingerprint;
-
-    // finish_reason usually appears inside choices
-    const fr = parsed?.choices?.[0]?.finish_reason;
-    if (fr && !finishReason) finishReason = fr;
-  }
-
-  return {
-    tokensPrompt: tokensPrompt ?? null,
-    tokensCompletion: tokensCompletion ?? null,
-    tokensTotal: tokensTotal ?? null,
-    model: model ?? null,
-    finishReason: finishReason ?? null,
-    responseId: responseId ?? null,
-    systemFingerprint: systemFingerprint ?? null,
-  };
-}
-
 // ---------- Pretty logging ----------
 function formatBeautifulLog(trace: TraceData) {
   const colors = {
@@ -608,6 +522,7 @@ function formatBeautifulLog(trace: TraceData) {
 // ------------------------------------------------------------
 export class Observa {
   private apiKey: string;
+  private instanceId: string;
 
   private tenantId: string;
   private projectId: string;
@@ -637,9 +552,22 @@ export class Observa {
   private tracesWithErrors: Set<string> = new Set();
   // Track root span IDs for traces (for automatic trace_end generation)
   private traceRootSpanIds: Map<string, string> = new Map();
+  // Track known span IDs per trace to validate feedback parentSpanId
+  private traceSpanIds: Map<string, Set<string>> = new Map();
+
+  private registerSpanForTrace(traceId: string | null | undefined, spanId: string): void {
+    if (!traceId) return;
+    const existing = this.traceSpanIds.get(traceId);
+    if (existing) {
+      existing.add(spanId);
+      return;
+    }
+    this.traceSpanIds.set(traceId, new Set([spanId]));
+  }
 
   constructor(config: ObservaInitConfig) {
     this.apiKey = config.apiKey;
+    this.instanceId = crypto.randomUUID();
 
     // Observa backend URL (defaults to production, can override for dev)
     let apiUrlEnv: string | undefined;
@@ -787,6 +715,7 @@ export class Observa {
 
     const event: CanonicalEvent = {
       ...baseProps,
+      trace_id: (eventData as any).trace_id ?? baseProps.trace_id,
       span_id: spanId,
       parent_span_id:
         (eventData.parent_span_id !== undefined
@@ -802,6 +731,39 @@ export class Observa {
       route: eventData.route ?? null,
       attributes: eventData.attributes,
     };
+
+    if (event.event_type === "llm_call") {
+      const llmAttrs: any = (event as any)?.attributes?.llm_call || {};
+      // #region agent log
+      fetch(
+        "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "index.ts:addEvent",
+            message: "llm_call event buffered",
+            data: {
+              model: llmAttrs.model || null,
+              provider: llmAttrs.provider_name || null,
+              inputLength:
+                typeof llmAttrs.input === "string" ? llmAttrs.input.length : 0,
+              outputLength:
+                typeof llmAttrs.output === "string"
+                  ? llmAttrs.output.length
+                  : 0,
+              status: llmAttrs.status || null,
+              traceId: event.trace_id,
+            },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            runId: "run1",
+            hypothesisId: "E",
+          }),
+        }
+      ).catch(() => {});
+      // #endregion
+    }
 
     this.eventBuffer.push(event);
 
@@ -835,6 +797,25 @@ export class Observa {
     this.rootSpanId = crypto.randomUUID();
     this.spanStack = [this.rootSpanId];
     this.traceStartTime = Date.now();
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "index.ts:startTrace",
+        message: "startTrace called",
+        data: {
+          instanceId: this.instanceId,
+          currentTraceId: this.currentTraceId,
+          rootSpanId: this.rootSpanId,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "J",
+      }),
+    }).catch(() => {});
+    // #endregion
 
     this.addEvent({
       event_type: "trace_start",
@@ -851,6 +832,38 @@ export class Observa {
       },
     });
 
+    return this.currentTraceId;
+  }
+
+  /**
+   * Check if a trace is currently active
+   */
+  hasActiveTrace(): boolean {
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "index.ts:hasActiveTrace",
+        message: "hasActiveTrace called",
+        data: {
+          instanceId: this.instanceId,
+          currentTraceId: this.currentTraceId,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "J",
+      }),
+    }).catch(() => {});
+    // #endregion
+    return !!this.currentTraceId;
+  }
+
+  /**
+   * Debug helper: expose current trace id
+   */
+  getCurrentTraceId(): string | null {
     return this.currentTraceId;
   }
 
@@ -915,8 +928,39 @@ export class Observa {
     // TIER 2: Conversation grouping
     conversationIdOtel?: string | null;
     choiceCount?: number | null;
+    // Optional linkage
+    traceId?: string | null;
+    // Additional metadata (tools, toolChoice, settings, etc.)
+    metadata?: Record<string, any> | null;
   }): string {
     const spanId = crypto.randomUUID();
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "index.ts:trackLLMCall",
+        message: "trackLLMCall inputs",
+        data: {
+          model: options.model,
+          providerName: options.providerName ?? null,
+          hasOutput:
+            typeof options.output === "string"
+              ? options.output.length > 0
+              : options.output !== null,
+          inputLength:
+            typeof options.input === "string" ? options.input.length : 0,
+          currentTraceId: this.currentTraceId,
+          spanStackDepth: this.spanStack.length,
+          traceId: options.traceId ?? null,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "D",
+      }),
+    }).catch(() => {});
+    // #endregion
 
     // Auto-infer provider from model if not provided
     let providerName = options.providerName;
@@ -954,6 +998,7 @@ export class Observa {
       options.finishReason === "max_tokens";
 
     this.addEvent({
+      ...(options.traceId ? { trace_id: options.traceId } : {}),
       event_type: "llm_call",
       span_id: spanId,
       attributes: {
@@ -1000,8 +1045,14 @@ export class Observa {
           // CRITICAL: Status field to mark errors (backend will use this to set span status)
           status: isError ? "error" : "success",
         },
+        // Add metadata at top level of attributes (matching Langfuse format)
+        ...(options.metadata ? { metadata: options.metadata } : {}),
       },
     });
+
+    // Register LLM span for trace so feedback can validate parentSpanId
+    const traceIdForSpan = options.traceId ?? this.currentTraceId ?? null;
+    this.registerSpanForTrace(traceIdForSpan, spanId);
 
     return spanId;
   }
@@ -1016,6 +1067,9 @@ export class Observa {
     resultStatus: "success" | "error" | "timeout";
     latencyMs: number;
     errorMessage?: string;
+    // Optional linkage
+    parentSpanId?: string | null;
+    traceId?: string | null;
     // TIER 2: OTEL Tool Standardization
     operationName?: "execute_tool" | string | null;
     toolType?: "function" | "extension" | "datastore" | string | null;
@@ -1026,9 +1080,33 @@ export class Observa {
   }): string {
     const spanId = crypto.randomUUID();
 
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "index.ts:trackToolCall",
+        message: "trackToolCall called",
+        data: {
+          toolName: options.toolName,
+          instanceId: this.instanceId,
+          currentTraceId: this.currentTraceId,
+          spanStackDepth: this.spanStack.length,
+          eventBufferSize: this.eventBuffer.length,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "G",
+      }),
+    }).catch(() => {});
+    // #endregion
+
     this.addEvent({
+      ...(options.traceId ? { trace_id: options.traceId } : {}),
       event_type: "tool_call",
       span_id: spanId,
+      parent_span_id: options.parentSpanId ?? null,
       attributes: {
         tool_call: {
           tool_name: options.toolName,
@@ -1047,6 +1125,28 @@ export class Observa {
         },
       },
     });
+
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "index.ts:trackToolCall",
+        message: "trackToolCall addEvent completed",
+        data: {
+          toolName: options.toolName,
+          instanceId: this.instanceId,
+          currentTraceId: this.currentTraceId,
+          spanStackDepth: this.spanStack.length,
+          eventBufferSize: this.eventBuffer.length,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "G",
+      }),
+    }).catch(() => {});
+    // #endregion
 
     return spanId;
   }
@@ -1165,12 +1265,31 @@ export class Observa {
     // Optional linkage: attach under an existing span
     parentSpanId?: string | null;
     spanId?: string; // provide to control span id for feedback
+    traceId?: string | null; // provide to attach to an existing trace
   }): string {
     const spanId = options.spanId || crypto.randomUUID();
-    const parentSpanId: string | null = (options.parentSpanId ??
-      (this.spanStack.length > 0
-        ? this.spanStack[this.spanStack.length - 1]
-        : null)) as string | null;
+    // CRITICAL: Do NOT default to spanStack for feedback.
+    // Feedback is often submitted asynchronously and spanStack may point to a previous message.
+    // Only attach to a span when parentSpanId is explicitly provided by the caller.
+    let parentSpanId: string | null = (options.parentSpanId ?? null) as
+      | string
+      | null;
+
+    // Validate parentSpanId belongs to the same trace if traceId is provided
+    if (parentSpanId && options.traceId) {
+      const knownSpans = this.traceSpanIds.get(options.traceId);
+      if (knownSpans && !knownSpans.has(parentSpanId)) {
+        console.warn(
+          "[Observa SDK] trackFeedback: parentSpanId does not belong to traceId. " +
+            "Ignoring parentSpanId to avoid attaching feedback to wrong message.",
+          {
+            traceId: options.traceId,
+            parentSpanId,
+          }
+        );
+        parentSpanId = null;
+      }
+    }
 
     // Clamp rating to 1-5 if provided
     let rating: number | null | undefined = options.rating;
@@ -1178,7 +1297,31 @@ export class Observa {
       rating = Math.max(1, Math.min(5, rating));
     }
 
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "index.ts:trackFeedback",
+        message: "trackFeedback called",
+        data: {
+          instanceId: this.instanceId,
+          currentTraceId: this.currentTraceId,
+          spanStackDepth: this.spanStack.length,
+          eventBufferSize: this.eventBuffer.length,
+          type: options.type,
+          hasParentSpanId: !!options.parentSpanId,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "L",
+      }),
+    }).catch(() => {});
+    // #endregion
+
     this.addEvent({
+      ...(options.traceId ? { trace_id: options.traceId } : {}),
       event_type: "feedback",
       span_id: spanId,
       parent_span_id: parentSpanId ?? null,
@@ -1197,6 +1340,28 @@ export class Observa {
         },
       },
     });
+
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "index.ts:trackFeedback",
+        message: "trackFeedback addEvent completed",
+        data: {
+          instanceId: this.instanceId,
+          currentTraceId: this.currentTraceId,
+          spanStackDepth: this.spanStack.length,
+          eventBufferSize: this.eventBuffer.length,
+          type: options.type,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "L",
+      }),
+    }).catch(() => {});
+    // #endregion
 
     return spanId;
   }
@@ -1467,6 +1632,30 @@ export class Observa {
     const traceEventsToSend = this.eventBuffer.filter(
       (e) => e.trace_id === this.currentTraceId
     );
+    // #region agent log
+    const traceEventTypeCounts: Record<string, number> = {};
+    for (const evt of traceEventsToSend) {
+      traceEventTypeCounts[evt.event_type] =
+        (traceEventTypeCounts[evt.event_type] || 0) + 1;
+    }
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "index.ts:endTrace",
+        message: "traceEventsToSend summary",
+        data: {
+          traceId: this.currentTraceId,
+          eventCount: traceEventsToSend.length,
+          eventTypes: traceEventTypeCounts,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "I",
+      }),
+    }).catch(() => {});
+    // #endregion
 
     // Send events (this will flush them)
     if (traceEventsToSend.length > 0) {
@@ -1488,132 +1677,6 @@ export class Observa {
   }
 
   /**
-   * Convert legacy TraceData to canonical events
-   */
-  private traceDataToCanonicalEvents(trace: TraceData): CanonicalEvent[] {
-    const events: CanonicalEvent[] = [];
-    const baseEvent = {
-      tenant_id: trace.tenantId,
-      project_id: trace.projectId,
-      environment: trace.environment,
-      trace_id: trace.traceId,
-      conversation_id: trace.conversationId || null,
-      session_id: trace.sessionId || null,
-      user_id: trace.userId || null,
-    };
-
-    // Trace start event
-    events.push({
-      ...baseEvent,
-      span_id: trace.spanId,
-      parent_span_id: trace.parentSpanId || null,
-      timestamp: trace.timestamp,
-      event_type: "trace_start",
-      attributes: {
-        trace_start: {
-          metadata: trace.metadata || null,
-        },
-      },
-    });
-
-    // LLM call event (if model present)
-    if (trace.model) {
-      const llmSpanId = crypto.randomUUID();
-      // Auto-infer provider from model
-      let providerName: string | null = null;
-      if (trace.model) {
-        const modelLower = trace.model.toLowerCase();
-        if (modelLower.includes("gpt") || modelLower.includes("openai")) {
-          providerName = "openai";
-        } else if (
-          modelLower.includes("claude") ||
-          modelLower.includes("anthropic")
-        ) {
-          providerName = "anthropic";
-        } else if (
-          modelLower.includes("gemini") ||
-          modelLower.includes("google")
-        ) {
-          providerName = "google";
-        } else if (modelLower.includes("vertex")) {
-          providerName = "gcp.vertex_ai";
-        } else if (
-          modelLower.includes("bedrock") ||
-          modelLower.includes("aws")
-        ) {
-          providerName = "aws.bedrock";
-        }
-      }
-
-      events.push({
-        ...baseEvent,
-        span_id: llmSpanId,
-        parent_span_id: trace.spanId,
-        timestamp: trace.timestamp,
-        event_type: "llm_call",
-        attributes: {
-          llm_call: {
-            model: trace.model,
-            input: trace.query || null,
-            output: trace.response || null,
-            input_tokens: trace.tokensPrompt || null,
-            output_tokens: trace.tokensCompletion || null,
-            total_tokens: trace.tokensTotal || null,
-            latency_ms: trace.latencyMs,
-            time_to_first_token_ms: trace.timeToFirstTokenMs || null,
-            streaming_duration_ms: trace.streamingDurationMs || null,
-            finish_reason: trace.finishReason || null,
-            response_id: trace.responseId || null,
-            system_fingerprint: trace.systemFingerprint || null,
-            cost: null, // Cost calculation handled by backend
-            // TIER 1: OTEL Semantic Conventions (auto-inferred)
-            operation_name: "chat", // Default for legacy track() method
-            provider_name: providerName,
-            // Other OTEL fields can be added via trackLLMCall() method
-          },
-        },
-      });
-    }
-
-    // Output event
-    events.push({
-      ...baseEvent,
-      span_id: crypto.randomUUID(),
-      parent_span_id: trace.spanId,
-      timestamp: trace.timestamp,
-      event_type: "output",
-      attributes: {
-        output: {
-          final_output: trace.response || null,
-          output_length: trace.responseLength || null,
-        },
-      },
-    });
-
-    // Trace end event
-    events.push({
-      ...baseEvent,
-      span_id: trace.spanId,
-      parent_span_id: trace.parentSpanId || null,
-      timestamp: trace.timestamp,
-      event_type: "trace_end",
-      attributes: {
-        trace_end: {
-          total_latency_ms: trace.latencyMs,
-          total_tokens: trace.tokensTotal || null,
-          total_cost: null, // Cost calculation handled by backend
-          outcome:
-            trace.status && trace.status >= 200 && trace.status < 300
-              ? "success"
-              : "error",
-        },
-      },
-    });
-
-    return events;
-  }
-
-  /**
    * Internal flush implementation
    */
   private async _doFlush(): Promise<void> {
@@ -1624,9 +1687,29 @@ export class Observa {
       return;
     }
 
+    const activeTraceId = this.currentTraceId;
+    const activeTraceEvents: CanonicalEvent[] = [];
+    const otherEvents: CanonicalEvent[] = [];
+    for (const event of eventsToFlush) {
+      if (activeTraceId && event.trace_id === activeTraceId) {
+        activeTraceEvents.push(event);
+      } else {
+        otherEvents.push(event);
+      }
+    }
+
+    if (activeTraceEvents.length > 0) {
+      // Keep active trace events buffered until endTrace is called.
+      this.eventBuffer.unshift(...activeTraceEvents);
+    }
+
+    if (otherEvents.length === 0) {
+      return;
+    }
+
     // Send events in batches (group by trace_id to send complete traces)
     const eventsByTrace = new Map<string, CanonicalEvent[]>();
-    for (const event of eventsToFlush) {
+    for (const event of otherEvents) {
       if (!eventsByTrace.has(event.trace_id)) {
         eventsByTrace.set(event.trace_id, []);
       }
@@ -1895,266 +1978,6 @@ export class Observa {
     }
   }
 
-  async track(
-    event: TrackEventInput,
-    action: () => Promise<Response>,
-    options?: { trackBlocking?: boolean }
-  ) {
-    // sampling (cheap control knob)
-    if (this.sampleRate < 1 && Math.random() > this.sampleRate) {
-      return action();
-    }
-
-    const startTime = Date.now();
-    const traceId = crypto.randomUUID();
-    const spanId = traceId; // MVP: 1 span per trace
-
-    // Set up context propagation
-    const runWithContext =
-      contextModule?.runInTraceContextAsync ||
-      ((ctx: any, fn: () => Promise<any>) => fn());
-    const context = contextModule?.createSpanContext?.(
-      traceId,
-      spanId,
-      null
-    ) || { traceId, spanId, parentSpanId: null };
-
-    const originalResponse = await runWithContext(context, action);
-    if (!originalResponse.body) return originalResponse;
-
-    // capture response headers
-    const responseHeaders: Record<string, string> = {};
-    originalResponse.headers.forEach((value: string, key: string) => {
-      responseHeaders[key] = value;
-    });
-
-    const [stream1, stream2] = originalResponse.body.tee();
-
-    // Capture stream (with blocking option for serverless)
-    const capturePromise = this.captureStream({
-      stream: stream2,
-      event,
-      traceId,
-      spanId,
-      parentSpanId: context.parentSpanId,
-      startTime,
-      status: originalResponse.status,
-      statusText: originalResponse.statusText,
-      headers: responseHeaders,
-    });
-
-    if (options?.trackBlocking) {
-      // Block until trace is sent (for serverless)
-      await capturePromise;
-    } else {
-      // Don't await (fire and forget, but log errors)
-      capturePromise.catch((err) => {
-        console.error("[Observa] captureStream promise rejected:", err);
-      });
-    }
-
-    return new Response(stream1, {
-      headers: originalResponse.headers,
-      status: originalResponse.status,
-      statusText: originalResponse.statusText,
-    });
-  }
-
-  private async captureStream(args: {
-    stream: ReadableStream;
-    event: TrackEventInput;
-    traceId: string;
-    spanId: string;
-    parentSpanId: string | null;
-    startTime: number;
-    status?: number;
-    statusText?: string;
-    headers?: Record<string, string>;
-  }) {
-    const {
-      stream,
-      event,
-      traceId,
-      spanId,
-      parentSpanId,
-      startTime,
-      status,
-      statusText,
-      headers,
-    } = args;
-
-    console.log(`[Observa] captureStream started for trace ${traceId}`);
-    try {
-      const reader = stream.getReader();
-      const decoder = new TextDecoder();
-
-      let fullResponse = "";
-      let firstTokenTime: number | undefined;
-      const chunks: string[] = [];
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        if (!firstTokenTime && value && value.length > 0) {
-          firstTokenTime = Date.now();
-        }
-
-        const chunk = decoder.decode(value, { stream: true });
-        chunks.push(chunk);
-        buffer += chunk;
-
-        // parse SSE lines
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (!data || data === "[DONE]") continue;
-
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed?.choices?.[0]?.delta?.content) {
-              fullResponse += parsed.choices[0].delta.content;
-            } else if (parsed?.choices?.[0]?.text) {
-              fullResponse += parsed.choices[0].text;
-            } else if (typeof parsed?.content === "string") {
-              fullResponse += parsed.content;
-            }
-          } catch {
-            // non-json payload; keep as text
-            fullResponse += data;
-          }
-        }
-
-        // hard safety cap (avoid huge payload / cost)
-        if (fullResponse.length > this.maxResponseChars) {
-          fullResponse =
-            fullResponse.slice(0, this.maxResponseChars) + "…[TRUNCATED]";
-          break;
-        }
-      }
-
-      if (buffer.trim()) {
-        // leftover
-        fullResponse += buffer;
-      }
-
-      const endTime = Date.now();
-      const latencyMs = endTime - startTime;
-
-      const timeToFirstTokenMs =
-        firstTokenTime != null ? firstTokenTime - startTime : null;
-      const streamingDurationMs =
-        firstTokenTime != null ? endTime - firstTokenTime : null;
-
-      const extracted = extractMetadataFromChunks(chunks);
-
-      // Validate tenant context is set (should never fail due to constructor validation, but safety check)
-      if (!this.tenantId || !this.projectId) {
-        throw new Error(
-          "Observa SDK: tenantId and projectId must be set. This indicates a SDK configuration error."
-        );
-      }
-
-      const traceData: TraceData = {
-        traceId,
-        spanId,
-        parentSpanId,
-
-        timestamp: new Date().toISOString(),
-
-        tenantId: this.tenantId,
-        projectId: this.projectId,
-        environment: this.environment,
-
-        query: event.query,
-        ...(event.context !== undefined && { context: event.context }),
-        ...((extracted.model ?? event.model) !== undefined && {
-          model: extracted.model ?? event.model,
-        }),
-        ...(event.metadata !== undefined && { metadata: event.metadata }),
-
-        response: fullResponse,
-        responseLength: fullResponse.length,
-
-        tokensPrompt: extracted.tokensPrompt ?? null,
-        tokensCompletion: extracted.tokensCompletion ?? null,
-        tokensTotal: extracted.tokensTotal ?? null,
-
-        latencyMs,
-        timeToFirstTokenMs,
-        streamingDurationMs,
-
-        status: status ?? null,
-        statusText: statusText ?? null,
-
-        finishReason: extracted.finishReason ?? null,
-        responseId: extracted.responseId ?? null,
-        systemFingerprint: extracted.systemFingerprint ?? null,
-
-        ...(headers !== undefined && { headers }),
-
-        // Conversation tracking fields
-        ...(event.conversationId !== undefined && {
-          conversationId: event.conversationId,
-        }),
-        ...(event.sessionId !== undefined && { sessionId: event.sessionId }),
-        ...(event.userId !== undefined && { userId: event.userId }),
-        ...(event.messageIndex !== undefined && {
-          messageIndex: event.messageIndex,
-        }),
-        ...(event.parentMessageId !== undefined && {
-          parentMessageId: event.parentMessageId,
-        }),
-      };
-
-      console.log(
-        `[Observa] Trace data prepared, converting to canonical events for ${traceId}, response length: ${fullResponse.length}`
-      );
-
-      // Convert to canonical events
-      const canonicalEvents = this.traceDataToCanonicalEvents(traceData);
-
-      // Add to buffer (will be flushed periodically or on explicit flush())
-      this.eventBuffer.push(...canonicalEvents);
-
-      // Auto-flush if buffer is full
-      if (this.eventBuffer.length >= this.maxBufferSize) {
-        this.flush().catch((err) => {
-          console.error("[Observa] Auto-flush failed:", err);
-        });
-      } else {
-        // Send immediately (with retry logic)
-        this._sendEventsWithRetry(canonicalEvents).catch((err) => {
-          console.error("[Observa] Failed to send events:", err);
-        });
-      }
-
-      // Magic link in dev mode
-      if (!this.isProduction) {
-        const traceUrl = `${this.apiUrl.replace(
-          /\/api.*$/,
-          ""
-        )}/traces/${traceId}`;
-        console.log(`[Observa] 🕊️ Trace captured: ${traceUrl}`);
-      }
-
-      console.log(`[Observa] Trace queued for sending: ${traceId}`);
-    } catch (err) {
-      console.error("[Observa] Error capturing stream:", err);
-      if (err instanceof Error) {
-        console.error("[Observa] Error name:", err.name);
-        console.error("[Observa] Error message:", err.message);
-        if (err.stack) {
-          console.error("[Observa] Error stack:", err.stack);
-        }
-      }
-    }
-  }
-
   /**
    * Send canonical events to Observa backend
    * (internal method, use _sendEventsWithRetry for retry logic)
@@ -2163,6 +1986,101 @@ export class Observa {
     if (events.length === 0) {
       return;
     }
+    // #region agent log
+    try {
+      const eventTypes: Record<string, number> = {};
+      let llmCount = 0;
+      let toolCount = 0;
+      let feedbackCount = 0;
+      let llmWithCost = 0;
+      let llmMissingModel = 0;
+      let llmMissingInput = 0;
+      let llmMissingOutput = 0;
+      for (const evt of events) {
+        eventTypes[evt.event_type] = (eventTypes[evt.event_type] || 0) + 1;
+        if (evt.event_type === "llm_call") {
+          llmCount += 1;
+          const llmAttrs = (evt as any)?.attributes?.llm_call || {};
+          const cost = llmAttrs?.cost;
+          if (typeof cost === "number" && Number.isFinite(cost)) {
+            llmWithCost += 1;
+          }
+          if (!llmAttrs?.model || llmAttrs.model === "unknown") {
+            llmMissingModel += 1;
+          }
+          if (
+            llmAttrs?.input === null ||
+            (typeof llmAttrs?.input === "string" && llmAttrs.input.length === 0)
+          ) {
+            llmMissingInput += 1;
+          }
+          if (
+            llmAttrs?.output === null ||
+            (typeof llmAttrs?.output === "string" &&
+              llmAttrs.output.length === 0)
+          ) {
+            llmMissingOutput += 1;
+          }
+        } else if (evt.event_type === "tool_call") {
+          toolCount += 1;
+        } else if (evt.event_type === "feedback") {
+          feedbackCount += 1;
+        }
+      }
+      fetch(
+        "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "index.ts:sendEvents",
+            message: "pre-send event summary",
+            data: {
+              eventCount: events.length,
+              eventTypes,
+              llmCount,
+              toolCount,
+              feedbackCount,
+              llmWithCost,
+              llmMissingModel,
+              llmMissingInput,
+              llmMissingOutput,
+            },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            runId: "run1",
+            hypothesisId: "A",
+          }),
+        }
+      ).catch(() => {});
+    } catch {
+      // ignore debug logging errors
+    }
+    // #endregion
+    // #region agent log
+    const sendEventTypeCounts: Record<string, number> = {};
+    for (const evt of events) {
+      sendEventTypeCounts[evt.event_type] =
+        (sendEventTypeCounts[evt.event_type] || 0) + 1;
+    }
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "index.ts:sendEvents",
+        message: "sending events summary",
+        data: {
+          traceId: events[0]?.trace_id,
+          eventCount: events.length,
+          eventTypes: sendEventTypeCounts,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "I",
+      }),
+    }).catch(() => {});
+    // #endregion
 
     // For backward compatibility, show pretty logs in dev mode
     // Extract first trace_id for logging
@@ -2242,6 +2160,29 @@ export class Observa {
 
         clearTimeout(timeoutId);
 
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "index.ts:sendEvents",
+              message: "ingest response status",
+              data: {
+                status: response.status,
+                statusText: response.statusText,
+                url,
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "G",
+            }),
+          }
+        ).catch(() => {});
+        // #endregion
+
         // Always log response status for debugging
         console.log(
           `[Observa] Response status: ${response.status} ${response.statusText}`
@@ -2255,6 +2196,32 @@ export class Observa {
           } catch {
             errorJson = { error: errorText };
           }
+
+          // #region agent log
+          fetch(
+            "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                location: "index.ts:sendEvents",
+                message: "ingest error response",
+                data: {
+                  status: response.status,
+                  statusText: response.statusText,
+                  errorPreview:
+                    typeof errorText === "string"
+                      ? errorText.substring(0, 300)
+                      : null,
+                },
+                timestamp: Date.now(),
+                sessionId: "debug-session",
+                runId: "run1",
+                hypothesisId: "G",
+              }),
+            }
+          ).catch(() => {});
+          // #endregion
 
           console.error(
             `[Observa] Backend API error: ${response.status} ${response.statusText}`,

@@ -8,12 +8,12 @@ The Observa SDK has been successfully migrated from the legacy `/api/v1/traces/i
 
 ### 1. Updated Event Format
 
-- **Before**: SDK sent a single `TraceData` object to `/api/v1/traces/ingest`
-- **After**: SDK converts `TraceData` to canonical events and sends to `/api/v1/events/ingest`
+- **Before**: SDK sent a single trace payload to `/api/v1/traces/ingest`
+- **After**: SDK emits canonical events and sends them to `/api/v1/events/ingest`
 
-### 2. Canonical Event Conversion
+### 2. Canonical Event Emission
 
-The SDK now converts each trace into multiple canonical events:
+The SDK now emits multiple canonical events per trace:
 
 1. **trace_start** - Beginning of trace with metadata
 2. **llm_call** - LLM call details (model, input, output, tokens, latency)
@@ -25,12 +25,6 @@ The SDK now converts each trace into multiple canonical events:
 - Changed from `/api/v1/traces/ingest` to `/api/v1/events/ingest`
 - Events are sent as a JSON array (batch format)
 - Same authentication (Bearer token)
-
-### 4. Backward Compatibility
-
-- Existing SDK API remains unchanged (`observa.track()` works the same)
-- Pretty logging in dev mode still works
-- All existing functionality preserved
 
 ## Code Changes
 
@@ -65,14 +59,13 @@ interface CanonicalEvent {
 
 ### Key Methods Updated
 
-1. **`traceDataToCanonicalEvents()`** - Converts legacy TraceData to canonical events
-2. **`sendEvents()`** - Sends canonical events to `/api/v1/events/ingest`
-3. **`_sendEventsWithRetry()`** - Retry logic for events (replaces `_sendTraceWithRetry`)
-4. **`_doFlush()`** - Groups events by trace_id before sending
+1. **`sendEvents()`** - Sends canonical events to `/api/v1/events/ingest`
+2. **`_sendEventsWithRetry()`** - Retry logic for events (replaces `_sendTraceWithRetry`)
+3. **`_doFlush()`** - Groups events by trace_id before sending
 
 ### Buffer Changes
 
-- Event buffer now stores `CanonicalEvent[]` instead of `TraceData[]`
+- Event buffer stores `CanonicalEvent[]`
 - Events are grouped by trace_id before sending (ensures complete traces)
 
 ## Testing
@@ -119,27 +112,18 @@ While the basic migration is complete, the following enhancements can be added:
 4. **Feedback tracking:**
    - `trackFeedback()` - User feedback (like/dislike/rating)
 
-## API Compatibility
-
-- ✅ **Backward Compatible**: Existing code using `observa.track()` continues to work
-- ✅ **Same Authentication**: Uses Bearer token (no changes)
-- ✅ **Same Configuration**: All config options unchanged
-- ✅ **Dev Mode**: Pretty logging still works in development
-
 ## Migration Status
 
 - ✅ Code updated and building successfully
 - ✅ TypeScript types correct
-- ✅ Backward compatibility maintained
 - ⏳ Testing required (manual testing with real application)
 - ⏳ Future enhancements (tool calls, retrievals, etc.)
 
 ## Files Modified
 
 - `src/index.ts` - Main SDK implementation
-  - Added `CanonicalEvent` type and conversion logic
+  - Added `CanonicalEvent` type and event batching
   - Updated endpoint to `/api/v1/events/ingest`
-  - Added `traceDataToCanonicalEvents()` method
   - Updated buffer and flush logic
 
 ## Documentation
