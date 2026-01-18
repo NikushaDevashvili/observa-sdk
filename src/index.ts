@@ -11,6 +11,7 @@
 import { observeOpenAI as observeOpenAIFn } from "./instrumentation/openai.js";
 import { observeAnthropic as observeAnthropicFn } from "./instrumentation/anthropic.js";
 import { observeVercelAI as observeVercelAIFn } from "./instrumentation/vercel-ai.js";
+import { observeLangChain as observeLangChainFn } from "./instrumentation/langchain.js";
 
 // Helper: safely access NODE_ENV without type issues
 function getNodeEnv(): string | undefined {
@@ -1192,12 +1193,17 @@ export class Observa {
     fusionMethod?: string | null;
     deduplicationRemovedCount?: number | null;
     qualityScore?: number | null;
+    // Optional linkage
+    parentSpanId?: string | null;
+    traceId?: string | null;
   }): string {
     const spanId = crypto.randomUUID();
 
     this.addEvent({
+      ...(options.traceId ? { trace_id: options.traceId } : {}),
       event_type: "retrieval",
       span_id: spanId,
+      parent_span_id: options.parentSpanId ?? null,
       attributes: {
         retrieval: {
           retrieval_context_ids: options.contextIds || null,
@@ -2048,6 +2054,92 @@ export class Observa {
       // Fail gracefully - return unwrapped SDK
       console.error("[Observa] Failed to load Vercel AI SDK wrapper:", error);
       return aiSdk;
+    }
+  }
+
+  /**
+   * Observe LangChain - returns callback handler for LangChain tracing
+   *
+   * @param options - Observation options (name, tags, userId, sessionId, traceId, redact)
+   * @returns CallbackHandler instance for use with LangChain
+   *
+   * @example
+   * ```typescript
+   * import { init } from 'observa-sdk';
+   * import { ChatOpenAI } from '@langchain/openai';
+   * import { ChatPromptTemplate } from '@langchain/core/prompts';
+   *
+   * const observa = init({ apiKey: '...' });
+   * const handler = observa.observeLangChain({ name: 'my-app' });
+   *
+   * const llm = new ChatOpenAI({ model: 'gpt-4' });
+   * const prompt = ChatPromptTemplate.fromTemplate('Tell me about {topic}');
+   * const chain = prompt | llm;
+   *
+   * const result = await chain.invoke(
+   *   { topic: 'AI' },
+   *   { callbacks: [handler] }
+   * );
+   * ```
+   *
+   * @example
+   * ```typescript
+   * // Distributed tracing - attach to existing trace
+   * const traceId = observa.startTrace({ name: 'my-workflow' });
+   * const handler = observa.observeLangChain({ traceId });
+   *
+   * chain.invoke(input, { callbacks: [handler] });
+   * ```
+   *
+   * @example
+   * ```typescript
+   * // Metadata via config (LangFuse-compatible)
+   * chain.invoke(
+   *   { topic: 'AI' },
+   *   {
+   *     callbacks: [handler],
+   *     metadata: {
+   *       observa_user_id: 'user-123',
+   *       observa_session_id: 'session-456',
+   *       observa_tags: ['production']
+   *     },
+   *     runName: 'my-trace-name'
+   *   }
+   * );
+   * ```
+   */
+  observeLangChain(options?: {
+    name?: string;
+    tags?: string[];
+    userId?: string;
+    sessionId?: string;
+    traceId?: string | null; // Attach to existing trace (from startTrace)
+    redact?: (data: any) => any;
+  }): any {
+    try {
+      // Use static import - tsup bundles everything together
+      // This works in both ESM and CommonJS when bundled
+      return observeLangChainFn(this, { ...options });
+    } catch (error) {
+      // Fail gracefully - return no-op handler
+      console.error("[Observa] Failed to load LangChain handler:", error);
+      return {
+        handleChainStart: () => Promise.resolve(),
+        handleChainEnd: () => Promise.resolve(),
+        handleChainError: () => Promise.resolve(),
+        handleLLMStart: () => Promise.resolve(),
+        handleLLMNewToken: () => Promise.resolve(),
+        handleLLMEnd: () => Promise.resolve(),
+        handleLLMError: () => Promise.resolve(),
+        handleToolStart: () => Promise.resolve(),
+        handleToolEnd: () => Promise.resolve(),
+        handleToolError: () => Promise.resolve(),
+        handleRetrieverStart: () => Promise.resolve(),
+        handleRetrieverEnd: () => Promise.resolve(),
+        handleRetrieverError: () => Promise.resolve(),
+        handleAgentAction: () => Promise.resolve(),
+        handleAgentFinish: () => Promise.resolve(),
+      };
     }
   }
 

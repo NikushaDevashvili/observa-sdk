@@ -800,6 +800,158 @@ for await (const chunk of stream.textStream) {
 }
 ```
 
+### `observa.observeLangChain(options?)`
+
+Observe LangChain operations using callback handlers. Returns a callback handler instance that tracks chains, LLM calls, tools, retrievers, and agents with proper hierarchy.
+
+**Requirements:**
+- Install `@langchain/core` as a peer dependency: `npm install @langchain/core`
+
+**Parameters:**
+- `options` (optional):
+  - `name` (optional): Application/service name
+  - `tags` (optional): Array of tags
+  - `userId` (optional): User identifier
+  - `sessionId` (optional): Session identifier
+  - `traceId` (optional): Attach to existing trace (from `startTrace()`)
+  - `redact` (optional): Function to sanitize data before sending to Observa
+
+**Returns**: CallbackHandler instance for use with LangChain `callbacks` option
+
+**Example - Basic Usage:**
+```typescript
+import { init } from "observa-sdk";
+import { ChatOpenAI } from "@langchain/openai";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
+
+const observa = init({
+  apiKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+});
+
+// Create callback handler
+const handler = observa.observeLangChain({
+  name: "my-langchain-app",
+  userId: "user-123",
+});
+
+// Setup LangChain
+const llm = new ChatOpenAI({ model: "gpt-4" });
+const prompt = ChatPromptTemplate.fromTemplate("Tell me about {topic}");
+const chain = prompt | llm;
+
+// Invoke with handler - automatically tracked!
+const result = await chain.invoke(
+  { topic: "AI" },
+  { callbacks: [handler] }
+);
+```
+
+**Example - Metadata via Config (LangFuse-compatible):**
+```typescript
+// Extract metadata from chain config (overrides handler options)
+const result = await chain.invoke(
+  { topic: "AI" },
+  {
+    callbacks: [handler],
+    metadata: {
+      observa_user_id: "user-123",
+      observa_session_id: "session-456",
+      observa_tags: ["production", "langchain"]
+    },
+    runName: "my-trace-name" // Optional: name for trace
+  }
+);
+```
+
+**Example - Distributed Tracing:**
+```typescript
+// Create trace manually, then attach LangChain handler
+const traceId = observa.startTrace({
+  name: "my-workflow",
+  userId: "user-123"
+});
+
+const handler = observa.observeLangChain({ traceId });
+
+// All LangChain operations will be part of this trace
+const result = await chain.invoke(
+  { topic: "AI" },
+  { callbacks: [handler] }
+);
+```
+
+**Example - LangGraph Support:**
+```typescript
+// Works automatically with LangGraph (uses same callback system)
+import { StateGraph } from "@langchain/langgraph";
+
+const graph = new StateGraph(...);
+const app = graph.compile();
+
+const handler = observa.observeLangChain({ name: "my-graph" });
+
+await app.invoke(
+  { input: "..." },
+  { callbacks: [handler] }
+);
+```
+
+**Example - Tools and Agents:**
+```typescript
+import { createAgent, tool } from "@langchain/core/agents";
+import * as z from "zod";
+
+const getWeather = tool(
+  (input) => `It's sunny in ${input.city}!`,
+  {
+    name: "get_weather",
+    description: "Get the weather for a city",
+    schema: z.object({
+      city: z.string(),
+    }),
+  }
+);
+
+const agent = createAgent({
+  model: new ChatOpenAI({ model: "gpt-4" }),
+  tools: [getWeather],
+});
+
+const handler = observa.observeLangChain({ name: "weather-agent" });
+
+// Tool calls are automatically tracked
+const result = await agent.invoke(
+  { messages: [{ role: "user", content: "What's the weather in SF?" }] },
+  { callbacks: [handler] }
+);
+```
+
+**Example - Streaming:**
+```typescript
+const handler = observa.observeLangChain({ name: "streaming-chain" });
+
+// Streaming is automatically tracked
+const stream = await chain.stream(
+  { topic: "AI" },
+  { callbacks: [handler] }
+);
+
+for await (const chunk of stream) {
+  console.log(chunk);
+}
+```
+
+**Serverless Considerations:**
+
+For serverless environments (AWS Lambda, Cloudflare Workers, etc.), set `LANGCHAIN_CALLBACKS_BACKGROUND=false` to ensure callbacks complete before the function exits:
+
+```typescript
+process.env.LANGCHAIN_CALLBACKS_BACKGROUND = "false";
+
+// Or ensure flushing before exit
+await observa.flush();
+```
+
 ### `observa.startTrace(options)`
 
 Start a new trace for manual trace management. Returns the trace ID.
