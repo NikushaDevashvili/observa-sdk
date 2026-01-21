@@ -18,6 +18,36 @@ import { extractProviderError } from "./error-utils";
 type GenerateTextFn = any;
 type StreamTextFn = any;
 
+function safeJsonStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(value, (_key, val) => {
+      if (val && typeof val === "object") {
+        if (seen.has(val)) {
+          return "[circular]";
+        }
+        seen.add(val);
+      }
+      if (typeof val === "bigint") {
+        return val.toString();
+      }
+      if (typeof val === "symbol") {
+        return val.toString();
+      }
+      if (typeof val === "function") {
+        return "[function]";
+      }
+      return val;
+    });
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return "[unserializable]";
+    }
+  }
+}
+
 export interface ObserveOptions {
   name?: string;
   tags?: string[];
@@ -593,7 +623,7 @@ function wrapToolsForTracking(
                 toolName,
                 hasArgs: executeArgs.length > 0,
                 argsPreview: executeArgs[0]
-                  ? JSON.stringify(executeArgs[0]).substring(0, 100)
+                  ? safeJsonStringify(executeArgs[0]).substring(0, 100)
                   : null,
               },
               timestamp: Date.now(),
@@ -749,7 +779,7 @@ function wrapToolsForTracking(
                 toolName,
                 hasArgs: executeArgs.length > 0,
                 argsPreview: executeArgs[0]
-                  ? JSON.stringify(executeArgs[0]).substring(0, 100)
+                  ? safeJsonStringify(executeArgs[0]).substring(0, 100)
                   : null,
               },
               timestamp: Date.now(),
@@ -1043,7 +1073,7 @@ async function traceGenerateText(
       inputText =
         typeof requestParams.prompt === "string"
           ? requestParams.prompt
-          : JSON.stringify(requestParams.prompt);
+          : safeJsonStringify(requestParams.prompt);
     }
   } else if (requestParams.messages) {
     // Extract only new messages (last user message + any messages after it)
@@ -1407,7 +1437,7 @@ async function traceStreamText(
       inputText =
         typeof requestParams.prompt === "string"
           ? requestParams.prompt
-          : JSON.stringify(requestParams.prompt);
+          : safeJsonStringify(requestParams.prompt);
     }
   } else if (requestParams.messages) {
     // Extract only new messages (last user message + any messages after it)
@@ -1443,7 +1473,7 @@ async function traceStreamText(
         firstRole: messageRoles[0] || null,
         lastRole: messageRoles[messageRoles.length - 1] || null,
         lastUserMessagePreview: lastUserMessage?.content
-          ? JSON.stringify(lastUserMessage.content).substring(0, 100)
+          ? safeJsonStringify(lastUserMessage.content).substring(0, 100)
           : null,
         hasActiveTraceMethod:
           typeof options?.observa?.hasActiveTrace === "function",
@@ -2241,7 +2271,7 @@ function recordTrace(
         inputText =
           typeof sanitizedReq.prompt === "string"
             ? sanitizedReq.prompt
-            : JSON.stringify(sanitizedReq.prompt);
+            : safeJsonStringify(sanitizedReq.prompt);
       }
     }
     // Extract only new messages (last user message + any messages after it)
@@ -2416,6 +2446,8 @@ function recordTrace(
         maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
         traceId: errorTraceId,
         metadata: Object.keys(errorMetadata).length > 0 ? errorMetadata : null,
+        toolDefinitions: errorMetadata.tools ?? null,
+        tools: errorMetadata.tools ?? null,
       });
 
       // Record error event with appropriate error type
@@ -2645,6 +2677,8 @@ function recordTrace(
       outputCost,
       traceId: resolvedTraceId,
       metadata: Object.keys(requestMetadata).length > 0 ? requestMetadata : null,
+      toolDefinitions: requestMetadata.tools ?? null,
+      tools: requestMetadata.tools ?? null,
     });
 
     // #region agent log
@@ -2854,7 +2888,7 @@ function recordError(
         inputText =
           typeof sanitizedReq.prompt === "string"
             ? sanitizedReq.prompt
-            : JSON.stringify(sanitizedReq.prompt);
+            : safeJsonStringify(sanitizedReq.prompt);
       } else if (sanitizedReq.messages) {
         // Extract only new messages (last user message + any messages after it)
         // This prevents duplicating the full conversation history in each trace
@@ -3011,6 +3045,8 @@ function recordError(
       maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
       traceId: errorTraceId,
       metadata: Object.keys(errorMetadata).length > 0 ? errorMetadata : null,
+      toolDefinitions: errorMetadata.tools ?? null,
+      tools: errorMetadata.tools ?? null,
     });
 
     if (toolCallBuffer && toolCallBuffer.length > 0) {

@@ -19,6 +19,60 @@ type Anthropic = any;
 // WeakMap Cache for Memoization (CRITICAL for object identity)
 const proxyCache = new WeakMap<object, any>();
 
+function normalizeToolDefinitions(
+  rawTools: any
+): Array<Record<string, any>> | null {
+  if (!rawTools) return null;
+
+  let toolsArray: Array<{ tool: any; name?: string }> = [];
+  if (Array.isArray(rawTools)) {
+    toolsArray = rawTools.map((tool: any) => ({ tool }));
+  } else if (rawTools instanceof Map) {
+    const mapEntries: Array<[any, any]> = Array.from(rawTools.entries());
+    toolsArray = mapEntries.map(([key, value]: [any, any]) => ({
+      tool: value,
+      name: String(key),
+    }));
+  } else if (typeof rawTools === "object") {
+    toolsArray = Object.entries(rawTools).map(([key, value]: [string, any]) => ({
+      tool: value,
+      name: key,
+    }));
+  }
+
+  const normalized = toolsArray.map(({ tool, name: keyName }) => {
+    if (typeof tool === "function") {
+      return {
+        type: "function",
+        name: tool.name || keyName || "unknown",
+        description: tool.description || null,
+        inputSchema: tool.parameters || tool.schema || {},
+      };
+    }
+    if (tool && typeof tool === "object") {
+      return {
+        type: tool.type || "function",
+        name: tool.name || tool.function?.name || keyName || "unknown",
+        description: tool.description || tool.function?.description || null,
+        inputSchema:
+          tool.parameters ||
+          tool.schema ||
+          tool.inputSchema ||
+          tool.function?.parameters ||
+          {},
+      };
+    }
+    return {
+      type: "function",
+      name: keyName || "unknown",
+      description: null,
+      inputSchema: {},
+    };
+  });
+
+  return normalized.length > 0 ? normalized : null;
+}
+
 export interface ObserveOptions {
   name?: string;
   tags?: string[];
@@ -232,6 +286,7 @@ function recordTrace(
 
     // Use Observa instance if provided
     if (opts.observa) {
+      const toolDefinitions = normalizeToolDefinitions(sanitizedReq?.tools);
       // Extract input text from messages
       const inputText =
         sanitizedReq.messages
@@ -288,6 +343,7 @@ function recordTrace(
           responseModel: sanitizedRes?.model || sanitizedReq.model || null,
           temperature: sanitizedReq.temperature || null,
           maxTokens: sanitizedReq.max_tokens || null,
+          toolDefinitions,
         });
 
         // Record error event with appropriate error type
@@ -341,6 +397,7 @@ function recordTrace(
         responseModel: sanitizedRes?.model || sanitizedReq.model || null,
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.max_tokens || null,
+        toolDefinitions,
       });
     }
   } catch (e) {
@@ -382,6 +439,7 @@ function recordError(
 
     // Use Observa instance if provided
     if (opts.observa) {
+      const toolDefinitions = normalizeToolDefinitions(sanitizedReq?.tools);
       // Use pre-extracted model if available, otherwise extract from request
       const model = preExtractedModel || sanitizedReq.model || "unknown";
 
@@ -432,6 +490,7 @@ function recordError(
         responseModel: model,
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.max_tokens || null,
+        toolDefinitions,
       });
 
       // Also create error event with full context and extracted error codes/categories

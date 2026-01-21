@@ -276,6 +276,8 @@ interface CanonicalEvent {
       // TIER 2: Conversation grouping
       conversation_id_otel?: string | null;
       choice_count?: number | null;
+      tool_definitions?: Array<Record<string, any>> | null;
+      tools?: Array<Record<string, any>> | null;
       // CRITICAL: Status field to mark errors (backend will use this to set span status)
       status?: "success" | "error" | null;
     };
@@ -510,12 +512,244 @@ function formatBeautifulLog(trace: TraceData) {
   if (trace.metadata && Object.keys(trace.metadata).length) {
     console.log(`\n${colors.bright}📎 Metadata${colors.reset}`);
     for (const [k, v] of Object.entries(trace.metadata)) {
-      const valueStr = typeof v === "object" ? JSON.stringify(v) : String(v);
+      const valueStr =
+        typeof v === "object" ? safeJsonStringify(v) : String(v);
       console.log(`  ${formatValue(k, valueStr, colors.gray)}`);
     }
   }
 
   console.log("═".repeat(90) + "\n");
+}
+
+// Escape control characters and invalid surrogates for safe JSON storage
+function escapeControlChars(value: string): string {
+  const withoutLoneSurrogates = value.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "\uFFFD"
+  );
+
+  return withoutLoneSurrogates.replace(
+    /[\u0000-\u001F\u2028\u2029]/g,
+    (char) => {
+      switch (char) {
+        case "\b":
+          return "\\b";
+        case "\f":
+          return "\\f";
+        case "\n":
+          return "\\n";
+        case "\r":
+          return "\\r";
+        case "\t":
+          return "\\t";
+        case "\u2028":
+          return "\\u2028";
+        case "\u2029":
+          return "\\u2029";
+        default: {
+          const code = char.charCodeAt(0).toString(16).padStart(4, "0");
+          return `\\u${code}`;
+        }
+      }
+    }
+  );
+}
+
+function truncateString(value: string, maxLength?: number): string {
+  if (!maxLength || value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength)}...`;
+}
+
+function sanitizeAttributesForStorage(
+  value: any,
+  seen: WeakSet<object> = new WeakSet(),
+  maxStringLength?: number
+): any {
+  if (value === null || value === undefined) return value;
+
+  const valueType = typeof value;
+  if (valueType === "string") {
+    return truncateString(escapeControlChars(value), maxStringLength);
+  }
+  if (valueType === "number" || valueType === "boolean") {
+    return value;
+  }
+  if (valueType === "bigint") {
+    return value.toString();
+  }
+  if (valueType === "function") {
+    return "[function]";
+  }
+  if (valueType === "symbol") {
+    return value.toString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      sanitizeAttributesForStorage(item, seen, maxStringLength)
+    );
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (value instanceof RegExp) {
+    return value.toString();
+  }
+  if (value instanceof Map) {
+    return Array.from(value.entries()).map(([key, val]) => [
+      sanitizeAttributesForStorage(key, seen, maxStringLength),
+      sanitizeAttributesForStorage(val, seen, maxStringLength),
+    ]);
+  }
+  if (value instanceof Set) {
+    return Array.from(value.values()).map((val) =>
+      sanitizeAttributesForStorage(val, seen, maxStringLength)
+    );
+  }
+
+  if (value && valueType === "object") {
+    if (seen.has(value)) {
+      return "[circular]";
+    }
+    seen.add(value);
+
+    const sanitized: Record<string, any> = {};
+    for (const [key, val] of Object.entries(value)) {
+      sanitized[key] = sanitizeAttributesForStorage(val, seen, maxStringLength);
+    }
+    return sanitized;
+  }
+
+  try {
+    return truncateString(escapeControlChars(String(value)), maxStringLength);
+  } catch {
+    return null;
+  }
+}
+
+function safeJsonStringify(
+  value: unknown,
+  options: { maxStringLength?: number } = {}
+): string {
+  const seen = new WeakSet<object>();
+  const maxStringLength = options.maxStringLength;
+
+  return JSON.stringify(value, (_key, val) => {
+    if (val === null || val === undefined) return val;
+    const type = typeof val;
+
+    if (type === "string") {
+      return truncateString(escapeControlChars(val), maxStringLength);
+    }
+    if (type === "bigint") {
+      return val.toString();
+    }
+    if (type === "function") {
+      return "[function]";
+    }
+    if (type === "symbol") {
+      return val.toString();
+    }
+
+    if (typeof val === "object") {
+      if (seen.has(val)) {
+        return "[circular]";
+      }
+      seen.add(val);
+
+      if (val instanceof Map) {
+        return Array.from(val.entries()).map(([key, mapVal]) => [
+          key,
+          mapVal,
+        ]);
+      }
+      if (val instanceof Set) {
+        return Array.from(val.values());
+      }
+    }
+
+    return val;
+  });
+}
+
+function toPlainJson<T>(value: T, maxStringLength?: number): T {
+  try {
+    const options = maxStringLength !== undefined ? { maxStringLength } : {};
+    return JSON.parse(safeJsonStringify(value, options)) as T;
+  } catch {
+    return value;
+  }
+}
+
+function normalizeToolArguments(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeMessageToolCalls(message: any): any {
+  if (!message || typeof message !== "object") return message;
+
+  const normalized = { ...message };
+  const additionalKwargs = normalized.additional_kwargs;
+  if (additionalKwargs && typeof additionalKwargs === "object") {
+    const kwargs = { ...additionalKwargs };
+    if (kwargs.function_call && typeof kwargs.function_call === "object") {
+      const functionCall = { ...kwargs.function_call };
+      if ("arguments" in functionCall) {
+        functionCall.arguments = normalizeToolArguments(functionCall.arguments);
+      }
+      kwargs.function_call = functionCall;
+    }
+    if (Array.isArray(kwargs.tool_calls)) {
+      kwargs.tool_calls = kwargs.tool_calls.map((call: any) => {
+        if (!call || typeof call !== "object") return call;
+        const normalizedCall = { ...call };
+        if (normalizedCall.function && typeof normalizedCall.function === "object") {
+          const fn = { ...normalizedCall.function };
+          if ("arguments" in fn) {
+            fn.arguments = normalizeToolArguments(fn.arguments);
+          }
+          normalizedCall.function = fn;
+        }
+        return normalizedCall;
+      });
+    }
+    normalized.additional_kwargs = kwargs;
+  }
+
+  if (Array.isArray(normalized.tool_calls)) {
+    normalized.tool_calls = normalized.tool_calls.map((call: any) => {
+      if (!call || typeof call !== "object") return call;
+      const normalizedCall = { ...call };
+      if (normalizedCall.function && typeof normalizedCall.function === "object") {
+        const fn = { ...normalizedCall.function };
+        if ("arguments" in fn) {
+          fn.arguments = normalizeToolArguments(fn.arguments);
+        }
+        normalizedCall.function = fn;
+      }
+      return normalizedCall;
+    });
+  }
+
+  if (normalized.function_call && typeof normalized.function_call === "object") {
+    const functionCall = { ...normalized.function_call };
+    if ("arguments" in functionCall) {
+      functionCall.arguments = normalizeToolArguments(functionCall.arguments);
+    }
+    normalized.function_call = functionCall;
+  }
+
+  return normalized;
 }
 
 // ------------------------------------------------------------
@@ -714,14 +948,16 @@ export class Observa {
       this.traceRootSpanIds.set(baseProps.trace_id, spanId);
     }
 
+    const resolvedParentSpanId =
+      (eventData.parent_span_id !== undefined
+        ? eventData.parent_span_id
+        : parentSpanId) ?? null;
+
     const event: CanonicalEvent = {
       ...baseProps,
       trace_id: (eventData as any).trace_id ?? baseProps.trace_id,
       span_id: spanId,
-      parent_span_id:
-        (eventData.parent_span_id !== undefined
-          ? eventData.parent_span_id
-          : parentSpanId) ?? null,
+      parent_span_id: resolvedParentSpanId === spanId ? null : resolvedParentSpanId,
       timestamp: eventData.timestamp || new Date().toISOString(),
       event_type: eventData.event_type,
       conversation_id: eventData.conversation_id ?? null,
@@ -730,7 +966,11 @@ export class Observa {
       agent_name: eventData.agent_name ?? null,
       version: eventData.version ?? null,
       route: eventData.route ?? null,
-      attributes: eventData.attributes,
+      attributes: sanitizeAttributesForStorage(
+        eventData.attributes,
+        undefined,
+        this.maxResponseChars
+      ),
     };
 
     if (event.event_type === "llm_call") {
@@ -933,6 +1173,8 @@ export class Observa {
     traceId?: string | null;
     // Additional metadata (tools, toolChoice, settings, etc.)
     metadata?: Record<string, any> | null;
+    toolDefinitions?: Array<Record<string, any>> | null;
+    tools?: Array<Record<string, any>> | null;
   }): string {
     const spanId = crypto.randomUUID();
     // #region agent log
@@ -989,6 +1231,20 @@ export class Observa {
     // Auto-infer operation name if not provided
     const operationName = options.operationName || "chat";
 
+    // Normalize tool call arguments so we avoid double-encoded JSON strings
+    const normalizedInputMessages = options.inputMessages
+      ? options.inputMessages.map((message) => normalizeMessageToolCalls(message))
+      : null;
+    const normalizedOutputMessages = options.outputMessages
+      ? options.outputMessages.map((message) => normalizeMessageToolCalls(message))
+      : null;
+    const safeInputMessages = normalizedInputMessages
+      ? toPlainJson(normalizedInputMessages, this.maxResponseChars)
+      : null;
+    const safeOutputMessages = normalizedOutputMessages
+      ? toPlainJson(normalizedOutputMessages, this.maxResponseChars)
+      : null;
+
     // CRITICAL FIX: Mark span as error if output is null (empty response)
     const isError =
       options.output === null ||
@@ -998,28 +1254,9 @@ export class Observa {
       options.finishReason === "length" ||
       options.finishReason === "max_tokens";
 
-    // CRITICAL FIX: Ensure input is always a string or null, never an object
-    // This prevents "[object Object]" from appearing in the data
-    let normalizedInput: string | null = null;
-    if (options.input !== null && options.input !== undefined) {
-      if (typeof options.input === "string") {
-        normalizedInput = options.input;
-      } else {
-        // If input is an object, stringify it
-        try {
-          normalizedInput = JSON.stringify(options.input);
-        } catch {
-          normalizedInput = String(options.input);
-        }
-      }
-    } else if (options.inputMessages && options.inputMessages.length > 0) {
-      // Fallback: if input is null but we have messages, stringify them
-      try {
-        normalizedInput = JSON.stringify(options.inputMessages);
-      } catch {
-        normalizedInput = null;
-      }
-    }
+    const safeMetadata = options.metadata
+      ? toPlainJson(options.metadata, this.maxResponseChars)
+      : null;
 
     this.addEvent({
       ...(options.traceId ? { trace_id: options.traceId } : {}),
@@ -1028,7 +1265,7 @@ export class Observa {
       attributes: {
         llm_call: {
           model: options.model,
-          input: normalizedInput,
+          input: options.input || null,
           output: options.output || null,
           input_tokens: options.inputTokens || null,
           output_tokens: options.outputTokens || null,
@@ -1057,8 +1294,8 @@ export class Observa {
           input_cost: options.inputCost || null,
           output_cost: options.outputCost || null,
           // TIER 1: Structured message objects
-          input_messages: options.inputMessages || null,
-          output_messages: options.outputMessages || null,
+          input_messages: safeInputMessages || null,
+          output_messages: safeOutputMessages || null,
           system_instructions: options.systemInstructions || null,
           // TIER 2: Server metadata
           server_address: options.serverAddress || null,
@@ -1066,11 +1303,13 @@ export class Observa {
           // TIER 2: Conversation grouping
           conversation_id_otel: options.conversationIdOtel || null,
           choice_count: options.choiceCount || null,
+          tool_definitions: options.toolDefinitions ?? options.tools ?? null,
+          tools: options.tools ?? options.toolDefinitions ?? null,
           // CRITICAL: Status field to mark errors (backend will use this to set span status)
           status: isError ? "error" : "success",
         },
         // Add metadata at top level of attributes (matching Langfuse format)
-        ...(options.metadata ? { metadata: options.metadata } : {}),
+        ...(safeMetadata ? { metadata: safeMetadata } : {}),
       },
     });
 
@@ -1193,17 +1432,12 @@ export class Observa {
     fusionMethod?: string | null;
     deduplicationRemovedCount?: number | null;
     qualityScore?: number | null;
-    // Optional linkage
-    parentSpanId?: string | null;
-    traceId?: string | null;
   }): string {
     const spanId = crypto.randomUUID();
 
     this.addEvent({
-      ...(options.traceId ? { trace_id: options.traceId } : {}),
       event_type: "retrieval",
       span_id: spanId,
-      parent_span_id: options.parentSpanId ?? null,
       attributes: {
         retrieval: {
           retrieval_context_ids: options.contextIds || null,
@@ -1393,56 +1627,6 @@ export class Observa {
     // #endregion
 
     return spanId;
-  }
-
-  /**
-   * Convenience method to track "like" feedback
-   * Shortcut for trackFeedback({ type: "like", outcome: "success", ... })
-   */
-  like(options?: {
-    comment?: string;
-    conversationId?: string;
-    sessionId?: string;
-    userId?: string;
-    messageIndex?: number;
-    parentMessageId?: string;
-    agentName?: string;
-    version?: string;
-    route?: string;
-    parentSpanId?: string | null;
-    spanId?: string;
-    traceId?: string | null;
-  }): string {
-    return this.trackFeedback({
-      type: "like",
-      outcome: "success",
-      ...options,
-    });
-  }
-
-  /**
-   * Convenience method to track "dislike" feedback
-   * Shortcut for trackFeedback({ type: "dislike", outcome: "failure", ... })
-   */
-  dislike(options?: {
-    comment?: string;
-    conversationId?: string;
-    sessionId?: string;
-    userId?: string;
-    messageIndex?: number;
-    parentMessageId?: string;
-    agentName?: string;
-    version?: string;
-    route?: string;
-    parentSpanId?: string | null;
-    spanId?: string;
-    traceId?: string | null;
-  }): string {
-    return this.trackFeedback({
-      type: "dislike",
-      outcome: "failure",
-      ...options,
-    });
   }
 
   /**
@@ -2009,6 +2193,52 @@ export class Observa {
   }
 
   /**
+   * Observe LangChain - returns a callback handler for LangChain
+   *
+   * @param options - Observation options (name, tags, userId, sessionId, redact)
+   * @returns LangChain callback handler for tracing
+   *
+   * @example
+   * ```typescript
+   * import { init } from 'observa-sdk';
+   * const observa = init({ apiKey: '...' });
+   * const handler = observa.observeLangChain({ name: 'my-app' });
+   * ```
+   */
+  observeLangChain(
+    options?: {
+      name?: string;
+      tags?: string[];
+      userId?: string;
+      sessionId?: string;
+      redact?: (data: any) => any;
+    }
+  ): any {
+    try {
+      return observeLangChainFn(this, { ...options, observa: this });
+    } catch (error) {
+      console.error("[Observa] Failed to load LangChain handler:", error);
+      return {
+        handleChainStart: () => Promise.resolve(),
+        handleChainEnd: () => Promise.resolve(),
+        handleChainError: () => Promise.resolve(),
+        handleLLMStart: () => Promise.resolve(),
+        handleLLMNewToken: () => Promise.resolve(),
+        handleLLMEnd: () => Promise.resolve(),
+        handleLLMError: () => Promise.resolve(),
+        handleToolStart: () => Promise.resolve(),
+        handleToolEnd: () => Promise.resolve(),
+        handleToolError: () => Promise.resolve(),
+        handleRetrieverStart: () => Promise.resolve(),
+        handleRetrieverEnd: () => Promise.resolve(),
+        handleRetrieverError: () => Promise.resolve(),
+        handleAgentAction: () => Promise.resolve(),
+        handleAgentFinish: () => Promise.resolve(),
+      };
+    }
+  }
+
+  /**
    * Observe Vercel AI SDK - wraps generateText and streamText functions
    *
    * @param aiSdk - Vercel AI SDK module (imported from 'ai')
@@ -2054,92 +2284,6 @@ export class Observa {
       // Fail gracefully - return unwrapped SDK
       console.error("[Observa] Failed to load Vercel AI SDK wrapper:", error);
       return aiSdk;
-    }
-  }
-
-  /**
-   * Observe LangChain - returns callback handler for LangChain tracing
-   *
-   * @param options - Observation options (name, tags, userId, sessionId, traceId, redact)
-   * @returns CallbackHandler instance for use with LangChain
-   *
-   * @example
-   * ```typescript
-   * import { init } from 'observa-sdk';
-   * import { ChatOpenAI } from '@langchain/openai';
-   * import { ChatPromptTemplate } from '@langchain/core/prompts';
-   *
-   * const observa = init({ apiKey: '...' });
-   * const handler = observa.observeLangChain({ name: 'my-app' });
-   *
-   * const llm = new ChatOpenAI({ model: 'gpt-4' });
-   * const prompt = ChatPromptTemplate.fromTemplate('Tell me about {topic}');
-   * const chain = prompt | llm;
-   *
-   * const result = await chain.invoke(
-   *   { topic: 'AI' },
-   *   { callbacks: [handler] }
-   * );
-   * ```
-   *
-   * @example
-   * ```typescript
-   * // Distributed tracing - attach to existing trace
-   * const traceId = observa.startTrace({ name: 'my-workflow' });
-   * const handler = observa.observeLangChain({ traceId });
-   *
-   * chain.invoke(input, { callbacks: [handler] });
-   * ```
-   *
-   * @example
-   * ```typescript
-   * // Metadata via config (LangFuse-compatible)
-   * chain.invoke(
-   *   { topic: 'AI' },
-   *   {
-   *     callbacks: [handler],
-   *     metadata: {
-   *       observa_user_id: 'user-123',
-   *       observa_session_id: 'session-456',
-   *       observa_tags: ['production']
-   *     },
-   *     runName: 'my-trace-name'
-   *   }
-   * );
-   * ```
-   */
-  observeLangChain(options?: {
-    name?: string;
-    tags?: string[];
-    userId?: string;
-    sessionId?: string;
-    traceId?: string | null; // Attach to existing trace (from startTrace)
-    redact?: (data: any) => any;
-  }): any {
-    try {
-      // Use static import - tsup bundles everything together
-      // This works in both ESM and CommonJS when bundled
-      return observeLangChainFn(this, { ...options });
-    } catch (error) {
-      // Fail gracefully - return no-op handler
-      console.error("[Observa] Failed to load LangChain handler:", error);
-      return {
-        handleChainStart: () => Promise.resolve(),
-        handleChainEnd: () => Promise.resolve(),
-        handleChainError: () => Promise.resolve(),
-        handleLLMStart: () => Promise.resolve(),
-        handleLLMNewToken: () => Promise.resolve(),
-        handleLLMEnd: () => Promise.resolve(),
-        handleLLMError: () => Promise.resolve(),
-        handleToolStart: () => Promise.resolve(),
-        handleToolEnd: () => Promise.resolve(),
-        handleToolError: () => Promise.resolve(),
-        handleRetrieverStart: () => Promise.resolve(),
-        handleRetrieverEnd: () => Promise.resolve(),
-        handleRetrieverError: () => Promise.resolve(),
-        handleAgentAction: () => Promise.resolve(),
-        handleAgentFinish: () => Promise.resolve(),
-      };
     }
   }
 
@@ -2313,13 +2457,17 @@ export class Observa {
       const timeoutId = setTimeout(() => controller.abort(), 10000);
 
       try {
+        const payload = safeJsonStringify(events, {
+          maxStringLength: this.maxResponseChars,
+        });
+
         const response = await fetch(url, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(events),
+          body: payload,
           signal: controller.signal,
         });
 
