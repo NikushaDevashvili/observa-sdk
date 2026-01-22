@@ -209,6 +209,25 @@ function normalizeMessages(messages: any): any[] {
   return [messages];
 }
 
+function buildSystemInstructions(system: any): Array<{ type: string; content: any }> | null {
+  if (!system) return null;
+  if (Array.isArray(system)) {
+    return system.map((item) => ({
+      type: "system",
+      content: item,
+    }));
+  }
+  return [{ type: "system", content: system }];
+}
+
+function prependSystemMessage(messages: any[] | null, system: any): any[] | null {
+  if (!system) return messages;
+  const normalized = messages ? [...messages] : [];
+  const firstRole = normalized[0]?.role;
+  if (firstRole === "system") return normalized;
+  return [{ role: "system", content: system }, ...normalized];
+}
+
 function extractMessageText(message: any): string {
   if (!message) return "";
   const content = message.content ?? message.text;
@@ -1104,6 +1123,7 @@ async function traceGenerateText(
       .filter(Boolean)
       .join("\n");
   }
+  inputMessages = prependSystemMessage(inputMessages, requestParams.system);
 
   const toolCallBuffer: ToolCallInfo[] = [];
 
@@ -1459,6 +1479,7 @@ async function traceStreamText(
       .filter(Boolean)
       .join("\n");
   }
+  inputMessages = prependSystemMessage(inputMessages, requestParams.system);
 
   const toolCallBuffer: ToolCallInfo[] = [];
 
@@ -2172,6 +2193,11 @@ function recordTrace(
         metadata['ai.prompt.toolChoice'] = req.toolChoice;
         metadata.toolChoice = req.toolChoice;
       }
+
+      if (req.experimental_activeTools !== undefined) {
+        metadata['ai.prompt.active_tools'] = req.experimental_activeTools;
+        metadata.activeTools = req.experimental_activeTools;
+      }
       
       // Settings (maxRetries, etc.)
       if (req.maxRetries !== undefined) {
@@ -2388,8 +2414,14 @@ function recordTrace(
           : null);
       // Extract metadata for error case too
       const errorMetadata = extractRequestMetadata(sanitizedReq, trackedModel, provider);
+      const requestForNormalization = sanitizedReq?.messages
+        ? {
+            ...sanitizedReq,
+            messages: prependSystemMessage(sanitizedReq.messages, sanitizedReq.system),
+          }
+        : sanitizedReq;
       const normalized = buildNormalizedLLMCall({
-        request: sanitizedReq,
+        request: requestForNormalization,
         response: sanitizedRes,
         provider: provider || "vercel-ai",
         usage: {
@@ -2407,6 +2439,7 @@ function recordTrace(
         ...errorMetadata,
         ...otelMetadata,
       };
+      const systemInstructions = buildSystemInstructions(sanitizedReq?.system);
       const llmSpanId = opts.observa.trackLLMCall({
         model: trackedModel,
         input: inputText,
@@ -2430,6 +2463,7 @@ function recordTrace(
           trackedResponseModel !== "unknown" ? trackedResponseModel : null,
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
+        systemInstructions: systemInstructions,
         traceId: errorTraceId,
         metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : null,
         toolDefinitions: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
@@ -2638,8 +2672,14 @@ function recordTrace(
       (opts?.observa?.getCurrentTraceId
         ? opts.observa.getCurrentTraceId()
         : null);
+    const requestForNormalization = sanitizedReq?.messages
+      ? {
+          ...sanitizedReq,
+          messages: prependSystemMessage(sanitizedReq.messages, sanitizedReq.system),
+        }
+      : sanitizedReq;
     const normalized = buildNormalizedLLMCall({
-      request: sanitizedReq,
+      request: requestForNormalization,
       response: sanitizedRes,
       provider: provider || "vercel-ai",
       usage: {
@@ -2657,6 +2697,7 @@ function recordTrace(
       ...requestMetadata,
       ...otelMetadata,
     };
+    const systemInstructions = buildSystemInstructions(sanitizedReq?.system);
     const llmSpanId = opts.observa.trackLLMCall({
       model: trackedModel,
       input: inputText,
@@ -2677,6 +2718,7 @@ function recordTrace(
         trackedResponseModel !== "unknown" ? trackedResponseModel : null,
       temperature: sanitizedReq.temperature || null,
       maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
+      systemInstructions: systemInstructions,
       cost: totalCost,
       inputCost,
       outputCost,
@@ -2942,6 +2984,11 @@ function recordError(
         metadata['ai.prompt.toolChoice'] = req.toolChoice;
         metadata.toolChoice = req.toolChoice;
       }
+
+      if (req.experimental_activeTools !== undefined) {
+        metadata['ai.prompt.active_tools'] = req.experimental_activeTools;
+        metadata.activeTools = req.experimental_activeTools;
+      }
       
       // Settings (maxRetries, etc.)
       if (req.maxRetries !== undefined) {
@@ -2981,8 +3028,14 @@ function recordError(
         : null);
     // Extract metadata for error case
     const errorMetadata = extractRequestMetadata(sanitizedReq, trackedModel, providerName);
+    const requestForNormalization = sanitizedReq?.messages
+      ? {
+          ...sanitizedReq,
+          messages: prependSystemMessage(sanitizedReq.messages, sanitizedReq.system),
+        }
+      : sanitizedReq;
     const normalized = buildNormalizedLLMCall({
-      request: sanitizedReq,
+      request: requestForNormalization,
       provider: providerName,
       toolDefsOverride: sanitizedReq?.tools ?? preCallTools,
     });
@@ -2991,6 +3044,7 @@ function recordError(
       ...errorMetadata,
       ...otelMetadata,
     };
+    const systemInstructions = buildSystemInstructions(sanitizedReq?.system);
     const llmSpanId = opts.observa.trackLLMCall({
       model: trackedModel,
       input: inputText,
@@ -3010,6 +3064,7 @@ function recordError(
       responseModel: trackedModel !== "unknown" ? trackedModel : null,
       temperature: sanitizedReq.temperature || null,
       maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
+      systemInstructions: systemInstructions,
       traceId: errorTraceId,
       metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : null,
       toolDefinitions: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
