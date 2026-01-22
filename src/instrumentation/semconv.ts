@@ -13,7 +13,14 @@ export const OTEL_SEMCONV = {
   GEN_AI_RESPONSE_MODEL: 'gen_ai.response.model',
   GEN_AI_USAGE_INPUT_TOKENS: 'gen_ai.usage.input_tokens',
   GEN_AI_USAGE_OUTPUT_TOKENS: 'gen_ai.usage.output_tokens',
+  GEN_AI_USAGE_TOTAL_TOKENS: 'gen_ai.usage.total_tokens',
+  GEN_AI_USAGE_COST: 'gen_ai.usage.cost',
   GEN_AI_FINISH_REASONS: 'gen_ai.response.finish_reasons',
+
+  // Prompt/Response message attributes
+  AI_PROMPT_TOOLS: 'ai.prompt.tools',
+  AI_PROMPT_MESSAGES: 'ai.prompt.messages',
+  AI_RESPONSE_MESSAGES: 'ai.response.messages',
   
   // Observa Internal Attributes
   OBSERVA_TRACE_ID: 'observa.trace_id',

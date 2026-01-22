@@ -13,6 +13,11 @@
 import { wrapStream } from "./utils";
 import { getTraceContext, waitUntil } from "../context";
 import { extractProviderError } from "./error-utils";
+import {
+  buildNormalizedLLMCall,
+  buildOtelMetadata,
+  normalizeToolDefinitions,
+} from "./normalize";
 
 // Type for Vercel AI SDK functions (avoid direct import to handle optional dependency)
 type GenerateTextFn = any;
@@ -965,6 +970,7 @@ async function traceGenerateText(
   const model = requestParams.model || "unknown";
   const provider = extractProviderFromModel(model);
   const modelIdentifier = extractModelIdentifier(model);
+  const preCallTools = requestParams?.tools ?? null;
   // #region agent log
   fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
     method: "POST",
@@ -1149,7 +1155,8 @@ async function traceGenerateText(
       traceStarted,
       toolsWrapped,
       toolCallBuffer,
-      traceIdForRequest
+      traceIdForRequest,
+      preCallTools
     );
 
     if (traceInfo) {
@@ -1184,7 +1191,8 @@ async function traceGenerateText(
       inputMessages,
       traceStarted,
       toolCallBuffer,
-      traceIdForRequest
+      traceIdForRequest,
+      preCallTools
     );
     throw error;
   }
@@ -1401,6 +1409,7 @@ async function traceStreamText(
   const model = requestParams.model || "unknown";
   const provider = extractProviderFromModel(model);
   const modelIdentifier = extractModelIdentifier(model);
+  const preCallTools = requestParams?.tools ?? null;
   // #region agent log
   fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
     method: "POST",
@@ -1786,7 +1795,8 @@ async function traceStreamText(
               traceStarted,
               toolsWrapped,
               toolCallBuffer,
-              traceIdForRequest
+              traceIdForRequest,
+              preCallTools
             );
 
             // #region agent log
@@ -1847,7 +1857,8 @@ async function traceStreamText(
               inputMessages,
               traceStarted,
               toolCallBuffer,
-              traceIdForRequest
+              traceIdForRequest,
+              preCallTools
             ),
           () => toolCallBuffer.length > 0
         );
@@ -1893,7 +1904,8 @@ async function traceStreamText(
                 inputMessages,
                 traceStarted,
                 toolCallBuffer,
-                traceIdForRequest
+                traceIdForRequest,
+                preCallTools
               );
               throw error; // Re-throw so user sees the error
             }
@@ -1925,7 +1937,8 @@ async function traceStreamText(
                 inputMessages,
                 traceStarted,
                 toolCallBuffer,
-                traceIdForRequest
+                traceIdForRequest,
+                preCallTools
               );
               throw error; // Re-throw so user sees the error
             }
@@ -1978,7 +1991,8 @@ async function traceStreamText(
         traceStarted,
         toolsWrapped,
         toolCallBuffer,
-        traceIdForRequest
+        traceIdForRequest,
+        preCallTools
       );
 
       if (traceInfo) {
@@ -2016,7 +2030,8 @@ async function traceStreamText(
       inputMessages,
       traceStarted,
       toolCallBuffer,
-      traceIdForRequest
+      traceIdForRequest,
+      preCallTools
     );
     throw error;
   }
@@ -2036,7 +2051,8 @@ function recordTrace(
   traceStarted?: boolean,
   toolsWrapped?: boolean,
   toolCallBuffer?: ToolCallInfo[],
-  explicitTraceId?: string | null
+  explicitTraceId?: string | null,
+  preCallTools?: any
 ): {
   traceId: string | null;
   spanId: string;
@@ -2144,59 +2160,10 @@ function recordTrace(
       
       // Tools schema (if available)
       if (req.tools) {
-        // Normalize tools to array format, preserving tool names from object keys
-        let toolsArray: Array<{ tool: any; name?: string }> = [];
-        if (Array.isArray(req.tools)) {
-          toolsArray = req.tools.map((tool: any) => ({ tool }));
-        } else if (typeof req.tools === 'object') {
-          // Convert object/map to array, preserving key names
-          if (req.tools instanceof Map) {
-            // For Map, preserve key names
-            const mapEntries: Array<[any, any]> = Array.from(req.tools.entries());
-            toolsArray = mapEntries.map(([key, value]: [any, any]) => ({
-              tool: value,
-              name: String(key), // Use key as name
-            }));
-          } else {
-            // For object, preserve key names
-            toolsArray = Object.entries(req.tools).map(([key, value]: [string, any]) => ({
-              tool: value,
-              name: key, // Use key as name
-            }));
-          }
-        }
-        
-        // Extract tool schemas (matching OTEL ai.prompt.tools format)
-        metadata.tools = toolsArray.map(({ tool, name: keyName }) => {
-          // Handle different tool formats
-          if (typeof tool === 'function') {
-            // Function-based tool - try to extract schema if available
-            return {
-              type: "function",
-              name: tool.name || keyName || "unknown",
-              description: tool.description || null,
-              inputSchema: tool.parameters || tool.schema || {},
-            };
-          } else if (tool && typeof tool === 'object') {
-            // Object-based tool definition
-            return {
-              type: tool.type || "function",
-              name: tool.name || tool.function?.name || keyName || "unknown",
-              description: tool.description || tool.function?.description || null,
-              inputSchema: tool.parameters || tool.schema || tool.inputSchema || tool.function?.parameters || {},
-            };
-          }
-          return {
-            type: "function",
-            name: keyName || "unknown",
-            description: null,
-            inputSchema: {},
-          };
-        });
-        
-        // Also add in OTEL format (store as object, will be serialized when event is sent)
-        if (metadata.tools.length > 0) {
-          metadata['ai.prompt.tools'] = metadata.tools;
+        const toolDefinitions = normalizeToolDefinitions(req.tools);
+        if (toolDefinitions && toolDefinitions.length > 0) {
+          metadata.tools = toolDefinitions;
+          metadata['ai.prompt.tools'] = toolDefinitions;
         }
       }
       
@@ -2421,11 +2388,30 @@ function recordTrace(
           : null);
       // Extract metadata for error case too
       const errorMetadata = extractRequestMetadata(sanitizedReq, trackedModel, provider);
+      const normalized = buildNormalizedLLMCall({
+        request: sanitizedReq,
+        response: sanitizedRes,
+        provider: provider || "vercel-ai",
+        usage: {
+          inputTokens,
+          outputTokens,
+          totalTokens,
+        },
+        toolDefsOverride: sanitizedReq?.tools ?? preCallTools,
+        cost: estimatedCost,
+        inputCost,
+        outputCost,
+      });
+      const otelMetadata = buildOtelMetadata(normalized);
+      const mergedMetadata = {
+        ...errorMetadata,
+        ...otelMetadata,
+      };
       const llmSpanId = opts.observa.trackLLMCall({
         model: trackedModel,
         input: inputText,
         output: null, // No output on error
-        inputMessages,
+        inputMessages: normalized.inputMessages ?? inputMessages,
         outputMessages: null,
         inputTokens,
         outputTokens,
@@ -2445,9 +2431,9 @@ function recordTrace(
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
         traceId: errorTraceId,
-        metadata: Object.keys(errorMetadata).length > 0 ? errorMetadata : null,
-        toolDefinitions: errorMetadata.tools ?? null,
-        tools: errorMetadata.tools ?? null,
+        metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : null,
+        toolDefinitions: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
+        tools: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
       });
 
       // Record error event with appropriate error type
@@ -2652,12 +2638,31 @@ function recordTrace(
       (opts?.observa?.getCurrentTraceId
         ? opts.observa.getCurrentTraceId()
         : null);
+    const normalized = buildNormalizedLLMCall({
+      request: sanitizedReq,
+      response: sanitizedRes,
+      provider: provider || "vercel-ai",
+      usage: {
+        inputTokens,
+        outputTokens,
+        totalTokens,
+      },
+      toolDefsOverride: sanitizedReq?.tools ?? preCallTools,
+      cost: totalCost,
+      inputCost,
+      outputCost,
+    });
+    const otelMetadata = buildOtelMetadata(normalized);
+    const mergedMetadata = {
+      ...requestMetadata,
+      ...otelMetadata,
+    };
     const llmSpanId = opts.observa.trackLLMCall({
       model: trackedModel,
       input: inputText,
       output: outputText,
-      inputMessages,
-      outputMessages,
+      inputMessages: normalized.inputMessages ?? inputMessages,
+      outputMessages: normalized.outputMessages ?? outputMessages,
       inputTokens,
       outputTokens,
       totalTokens,
@@ -2676,9 +2681,9 @@ function recordTrace(
       inputCost,
       outputCost,
       traceId: resolvedTraceId,
-      metadata: Object.keys(requestMetadata).length > 0 ? requestMetadata : null,
-      toolDefinitions: requestMetadata.tools ?? null,
-      tools: requestMetadata.tools ?? null,
+      metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : null,
+      toolDefinitions: normalized.toolDefinitions ?? requestMetadata.tools ?? null,
+      tools: normalized.toolDefinitions ?? requestMetadata.tools ?? null,
     });
 
     // #region agent log
@@ -2835,7 +2840,8 @@ function recordError(
   preExtractedInputMessages?: any,
   traceStarted?: boolean,
   toolCallBuffer?: ToolCallInfo[],
-  explicitTraceId?: string | null
+  explicitTraceId?: string | null,
+  preCallTools?: any
 ) {
   const duration = Date.now() - start;
 
@@ -2924,59 +2930,10 @@ function recordError(
       
       // Tools schema (if available)
       if (req.tools) {
-        // Normalize tools to array format, preserving tool names from object keys
-        let toolsArray: Array<{ tool: any; name?: string }> = [];
-        if (Array.isArray(req.tools)) {
-          toolsArray = req.tools.map((tool: any) => ({ tool }));
-        } else if (typeof req.tools === 'object') {
-          // Convert object/map to array, preserving key names
-          if (req.tools instanceof Map) {
-            // For Map, preserve key names
-            const mapEntries: Array<[any, any]> = Array.from(req.tools.entries());
-            toolsArray = mapEntries.map(([key, value]: [any, any]) => ({
-              tool: value,
-              name: String(key), // Use key as name
-            }));
-          } else {
-            // For object, preserve key names
-            toolsArray = Object.entries(req.tools).map(([key, value]: [string, any]) => ({
-              tool: value,
-              name: key, // Use key as name
-            }));
-          }
-        }
-        
-        // Extract tool schemas (matching OTEL ai.prompt.tools format)
-        metadata.tools = toolsArray.map(({ tool, name: keyName }) => {
-          // Handle different tool formats
-          if (typeof tool === 'function') {
-            // Function-based tool - try to extract schema if available
-            return {
-              type: "function",
-              name: tool.name || keyName || "unknown",
-              description: tool.description || null,
-              inputSchema: tool.parameters || tool.schema || {},
-            };
-          } else if (tool && typeof tool === 'object') {
-            // Object-based tool definition
-            return {
-              type: tool.type || "function",
-              name: tool.name || tool.function?.name || keyName || "unknown",
-              description: tool.description || tool.function?.description || null,
-              inputSchema: tool.parameters || tool.schema || tool.inputSchema || tool.function?.parameters || {},
-            };
-          }
-          return {
-            type: "function",
-            name: keyName || "unknown",
-            description: null,
-            inputSchema: {},
-          };
-        });
-        
-        // Also add in OTEL format (store as object, will be serialized when event is sent)
-        if (metadata.tools.length > 0) {
-          metadata['ai.prompt.tools'] = metadata.tools;
+        const toolDefinitions = normalizeToolDefinitions(req.tools);
+        if (toolDefinitions && toolDefinitions.length > 0) {
+          metadata.tools = toolDefinitions;
+          metadata['ai.prompt.tools'] = toolDefinitions;
         }
       }
       
@@ -3024,11 +2981,21 @@ function recordError(
         : null);
     // Extract metadata for error case
     const errorMetadata = extractRequestMetadata(sanitizedReq, trackedModel, providerName);
+    const normalized = buildNormalizedLLMCall({
+      request: sanitizedReq,
+      provider: providerName,
+      toolDefsOverride: sanitizedReq?.tools ?? preCallTools,
+    });
+    const otelMetadata = buildOtelMetadata(normalized);
+    const mergedMetadata = {
+      ...errorMetadata,
+      ...otelMetadata,
+    };
     const llmSpanId = opts.observa.trackLLMCall({
       model: trackedModel,
       input: inputText,
       output: null, // No output on error
-      inputMessages: inputMessages,
+      inputMessages: normalized.inputMessages ?? inputMessages,
       outputMessages: null,
       inputTokens: null,
       outputTokens: null,
@@ -3044,9 +3011,9 @@ function recordError(
       temperature: sanitizedReq.temperature || null,
       maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
       traceId: errorTraceId,
-      metadata: Object.keys(errorMetadata).length > 0 ? errorMetadata : null,
-      toolDefinitions: errorMetadata.tools ?? null,
-      tools: errorMetadata.tools ?? null,
+      metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : null,
+      toolDefinitions: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
+      tools: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
     });
 
     if (toolCallBuffer && toolCallBuffer.length > 0) {

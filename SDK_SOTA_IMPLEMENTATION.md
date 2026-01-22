@@ -116,6 +116,39 @@ const spanId = observa.trackToolCall({
 });
 ```
 
+### 2.1 Agentic steps (Thought -> Action -> Observation)
+
+Use spans to represent agent loops without storing chain-of-thought.
+
+```typescript
+// Thought (summary only, no chain-of-thought)
+const agentSpanId = observa.trackLLMCall({
+  model: "gpt-4o-mini",
+  input: "Find the parental leave policy",
+  output: null,
+  latencyMs: 20,
+  metadata: { "ai.agent.reasoning_summary": "Search policy docs and summarize" },
+});
+
+// Action + Action Input
+observa.trackToolCall({
+  toolName: "search_policy",
+  args: { query: "parental leave policy" },
+  resultStatus: "success",
+  latencyMs: 120,
+  parentSpanId: agentSpanId,
+});
+
+// Observation and follow-up response
+observa.trackLLMCall({
+  model: "gpt-4o-mini",
+  input: null,
+  output: "Primary caregivers receive 16 weeks...",
+  latencyMs: 30,
+  providerName: "openai",
+});
+```
+
 ### 3. `trackRetrieval()` - Vector Metadata Enriched ✅
 
 **UPDATED** - Now includes vector metadata and quality scores.

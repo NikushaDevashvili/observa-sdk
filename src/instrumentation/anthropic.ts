@@ -10,6 +10,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { wrapStream } from "./utils";
 import { mapAnthropicToOTEL, OTEL_SEMCONV } from "./semconv";
+import { buildNormalizedLLMCall, buildOtelMetadata } from "./normalize";
 import { getTraceContext, waitUntil } from "../context";
 import { extractProviderError } from "./error-utils";
 
@@ -19,59 +20,6 @@ type Anthropic = any;
 // WeakMap Cache for Memoization (CRITICAL for object identity)
 const proxyCache = new WeakMap<object, any>();
 
-function normalizeToolDefinitions(
-  rawTools: any
-): Array<Record<string, any>> | null {
-  if (!rawTools) return null;
-
-  let toolsArray: Array<{ tool: any; name?: string }> = [];
-  if (Array.isArray(rawTools)) {
-    toolsArray = rawTools.map((tool: any) => ({ tool }));
-  } else if (rawTools instanceof Map) {
-    const mapEntries: Array<[any, any]> = Array.from(rawTools.entries());
-    toolsArray = mapEntries.map(([key, value]: [any, any]) => ({
-      tool: value,
-      name: String(key),
-    }));
-  } else if (typeof rawTools === "object") {
-    toolsArray = Object.entries(rawTools).map(([key, value]: [string, any]) => ({
-      tool: value,
-      name: key,
-    }));
-  }
-
-  const normalized = toolsArray.map(({ tool, name: keyName }) => {
-    if (typeof tool === "function") {
-      return {
-        type: "function",
-        name: tool.name || keyName || "unknown",
-        description: tool.description || null,
-        inputSchema: tool.parameters || tool.schema || {},
-      };
-    }
-    if (tool && typeof tool === "object") {
-      return {
-        type: tool.type || "function",
-        name: tool.name || tool.function?.name || keyName || "unknown",
-        description: tool.description || tool.function?.description || null,
-        inputSchema:
-          tool.parameters ||
-          tool.schema ||
-          tool.inputSchema ||
-          tool.function?.parameters ||
-          {},
-      };
-    }
-    return {
-      type: "function",
-      name: keyName || "unknown",
-      description: null,
-      inputSchema: {},
-    };
-  });
-
-  return normalized.length > 0 ? normalized : null;
-}
 
 export interface ObserveOptions {
   name?: string;
@@ -183,6 +131,7 @@ async function traceAnthropicCall(
   const startTime = Date.now();
   const requestParams = args[0] || {};
   const isStreaming = requestParams.stream === true;
+  const preCallTools = requestParams?.tools ?? null;
 
   // Extract input text early (before operation starts) to ensure it's captured even on errors
   const inputText =
@@ -219,7 +168,8 @@ async function traceAnthropicCall(
             startTime,
             options,
             fullResponse.timeToFirstToken,
-            fullResponse.streamingDuration
+            fullResponse.streamingDuration,
+            preCallTools
           );
         },
         (err: any) =>
@@ -230,13 +180,14 @@ async function traceAnthropicCall(
             options,
             inputText,
             inputMessages,
-            model
+            model,
+            preCallTools
           ),
         "anthropic"
       );
     } else {
       // Standard await -> Send Trace to Observa
-      recordTrace(requestParams, result, startTime, options);
+      recordTrace(requestParams, result, startTime, options, undefined, undefined, preCallTools);
       return result;
     }
   } catch (error) {
@@ -247,7 +198,8 @@ async function traceAnthropicCall(
       options,
       inputText,
       inputMessages,
-      model
+      model,
+      preCallTools
     );
     throw error; // Always re-throw user errors
   }
@@ -262,7 +214,8 @@ function recordTrace(
   start: number,
   opts?: ObserveOptions,
   timeToFirstToken?: number | null,
-  streamingDuration?: number | null
+  streamingDuration?: number | null,
+  preCallTools?: any
 ) {
   const duration = Date.now() - start;
 
@@ -286,7 +239,14 @@ function recordTrace(
 
     // Use Observa instance if provided
     if (opts.observa) {
-      const toolDefinitions = normalizeToolDefinitions(sanitizedReq?.tools);
+      const normalized = buildNormalizedLLMCall({
+        request: sanitizedReq,
+        response: sanitizedRes,
+        provider: "anthropic",
+        toolDefsOverride: sanitizedReq?.tools ?? preCallTools,
+      });
+      const toolDefinitions = normalized.toolDefinitions;
+      const otelMetadata = buildOtelMetadata(normalized);
       // Extract input text from messages
       const inputText =
         sanitizedReq.messages
@@ -326,8 +286,8 @@ function recordTrace(
           model: sanitizedReq.model || sanitizedRes?.model || "unknown",
           input: inputText,
           output: null, // No output on error
-          inputMessages: sanitizedReq.messages || null,
-          outputMessages: null,
+          inputMessages: normalized.inputMessages,
+          outputMessages: normalized.outputMessages,
           inputTokens: sanitizedRes?.usage?.input_tokens || null,
           outputTokens: sanitizedRes?.usage?.output_tokens || null,
           totalTokens:
@@ -344,6 +304,7 @@ function recordTrace(
           temperature: sanitizedReq.temperature || null,
           maxTokens: sanitizedReq.max_tokens || null,
           toolDefinitions,
+          metadata: otelMetadata,
         });
 
         // Record error event with appropriate error type
@@ -380,8 +341,8 @@ function recordTrace(
         model: sanitizedReq.model || sanitizedRes?.model || "unknown",
         input: inputText,
         output: outputText,
-        inputMessages: sanitizedReq.messages || null,
-        outputMessages: sanitizedRes?.content || null,
+        inputMessages: normalized.inputMessages,
+        outputMessages: normalized.outputMessages,
         inputTokens: sanitizedRes?.usage?.input_tokens || null,
         outputTokens: sanitizedRes?.usage?.output_tokens || null,
         totalTokens:
@@ -398,6 +359,7 @@ function recordTrace(
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.max_tokens || null,
         toolDefinitions,
+        metadata: otelMetadata,
       });
     }
   } catch (e) {
@@ -417,7 +379,8 @@ function recordError(
   opts?: ObserveOptions,
   preExtractedInputText?: string | null,
   preExtractedInputMessages?: any,
-  preExtractedModel?: string
+  preExtractedModel?: string,
+  preCallTools?: any
 ) {
   const duration = Date.now() - start;
 
@@ -439,7 +402,13 @@ function recordError(
 
     // Use Observa instance if provided
     if (opts.observa) {
-      const toolDefinitions = normalizeToolDefinitions(sanitizedReq?.tools);
+      const normalized = buildNormalizedLLMCall({
+        request: sanitizedReq,
+        provider: "anthropic",
+        toolDefsOverride: sanitizedReq?.tools ?? preCallTools,
+      });
+      const toolDefinitions = normalized.toolDefinitions;
+      const otelMetadata = buildOtelMetadata(normalized);
       // Use pre-extracted model if available, otherwise extract from request
       const model = preExtractedModel || sanitizedReq.model || "unknown";
 
@@ -491,6 +460,7 @@ function recordError(
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.max_tokens || null,
         toolDefinitions,
+        metadata: otelMetadata,
       });
 
       // Also create error event with full context and extracted error codes/categories

@@ -10,6 +10,12 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import {
+  buildNormalizedLLMCall,
+  buildOtelMetadata,
+  normalizeToolDefinitions,
+} from "./normalize";
+
 // Estimate tokens from text (rough estimate)
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -88,59 +94,6 @@ function safeSerialize(value: any, maxLength = 5000): string | null {
   }
 }
 
-function normalizeToolDefinitions(
-  rawTools: any
-): Array<Record<string, any>> | null {
-  if (!rawTools) return null;
-
-  let toolsArray: Array<{ tool: any; name?: string }> = [];
-  if (Array.isArray(rawTools)) {
-    toolsArray = rawTools.map((tool: any) => ({ tool }));
-  } else if (rawTools instanceof Map) {
-    const mapEntries: Array<[any, any]> = Array.from(rawTools.entries());
-    toolsArray = mapEntries.map(([key, value]: [any, any]) => ({
-      tool: value,
-      name: String(key),
-    }));
-  } else if (typeof rawTools === "object") {
-    toolsArray = Object.entries(rawTools).map(([key, value]: [string, any]) => ({
-      tool: value,
-      name: key,
-    }));
-  }
-
-  const normalized = toolsArray.map(({ tool, name: keyName }) => {
-    if (typeof tool === "function") {
-      return {
-        type: "function",
-        name: tool.name || keyName || "unknown",
-        description: tool.description || null,
-        inputSchema: tool.parameters || tool.schema || {},
-      };
-    }
-    if (tool && typeof tool === "object") {
-      return {
-        type: tool.type || "function",
-        name: tool.name || tool.function?.name || keyName || "unknown",
-        description: tool.description || tool.function?.description || null,
-        inputSchema:
-          tool.parameters ||
-          tool.schema ||
-          tool.inputSchema ||
-          tool.function?.parameters ||
-          {},
-      };
-    }
-    return {
-      type: "function",
-      name: keyName || "unknown",
-      description: null,
-      inputSchema: {},
-    };
-  });
-
-  return normalized.length > 0 ? normalized : null;
-}
 
 // Normalize additional_kwargs: parse nested JSON strings (like function_call.arguments)
 // to avoid double-encoding when the whole object is later JSON.stringify'd
@@ -752,13 +705,33 @@ export class ObservaCallbackHandler {
             modelForTracking = 'unknown';
           }
 
+          const normalized = buildNormalizedLLMCall({
+            request: {
+              messages: sanitizedInput?.messages || inputMessages,
+              model: modelForTracking,
+              tools: runInfo.extraParams?.tools,
+            },
+            response: {
+              messages: sanitizedOutput?.messages || outputMessages,
+              model: responseModel,
+            },
+            provider: providerName,
+            usage: {
+              inputTokens,
+              outputTokens,
+              totalTokens,
+            },
+            toolDefsOverride: runInfo.extraParams?.tools,
+          });
+          const otelMetadata = buildOtelMetadata(normalized);
+
           // Always try to track, even with partial data
           this.observa.trackLLMCall({
             model: modelForTracking,
             input: runInfo.prompts?.join('\n') || null,
             output: sanitizedOutput?.text || outputText || null,
-            inputMessages: sanitizedInput?.messages || inputMessages || null,
-            outputMessages: sanitizedOutput?.messages || outputMessages || null,
+            inputMessages: normalized.inputMessages || sanitizedInput?.messages || inputMessages || null,
+            outputMessages: normalized.outputMessages || sanitizedOutput?.messages || outputMessages || null,
             inputTokens,
             outputTokens,
             totalTokens,
@@ -774,7 +747,7 @@ export class ObservaCallbackHandler {
             maxTokens,
             topP,
             topK,
-            toolDefinitions,
+            toolDefinitions: normalized.toolDefinitions ?? toolDefinitions,
             traceId: runInfo.traceId,
             metadata: (() => {
               // Sanitize metadata to avoid circular references
@@ -813,7 +786,10 @@ export class ObservaCallbackHandler {
                 // If metadata serialization fails, skip it
               }
               
-              return safeMetadata;
+              return {
+                ...safeMetadata,
+                ...otelMetadata,
+              };
             })(),
           });
         } catch (trackError) {
@@ -834,6 +810,16 @@ export class ObservaCallbackHandler {
           const toolDefinitions = normalizeToolDefinitions(
             runInfo.extraParams?.tools
           );
+          const normalized = buildNormalizedLLMCall({
+            request: {
+              messages: runInfo.inputMessages || null,
+              model: 'unknown',
+              tools: runInfo.extraParams?.tools,
+            },
+            provider: 'langchain',
+            toolDefsOverride: runInfo.extraParams?.tools,
+          });
+          const otelMetadata = buildOtelMetadata(normalized);
           // Try to track with minimal data as fallback
           this.observa.trackLLMCall({
             model: 'unknown',
@@ -844,11 +830,12 @@ export class ObservaCallbackHandler {
             totalTokens: null,
             latencyMs: duration,
             traceId: runInfo.traceId || null,
-            toolDefinitions,
+            toolDefinitions: normalized.toolDefinitions ?? toolDefinitions,
             metadata: {
               langchain_error: true,
               error_message: error instanceof Error ? error.message : String(error),
               langchain_run_id: runId,
+              ...otelMetadata,
             },
           });
         }
