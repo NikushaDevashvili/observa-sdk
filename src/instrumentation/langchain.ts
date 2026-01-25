@@ -95,6 +95,369 @@ function safeSerialize(value: any, maxLength = 5000): string | null {
 }
 
 
+// Normalize tool arguments string - handles malformed JSON strings
+// This is a shared utility that matches the logic in index.ts normalizeToolArguments
+function normalizeToolArgumentsString(value: string): any {
+  // #region agent log
+  fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: "langchain.ts:normalizeToolArgumentsString:entry",
+      message: "normalizeToolArgumentsString called (langchain)",
+      data: {
+        valuePreview: value.substring(0, 200),
+        valueLength: value.length,
+        startsWithDoubleQuote: value.trim().startsWith('""'),
+        endsWithDoubleQuote: value.trim().endsWith('""'),
+      },
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "A,B,D",
+    }),
+  }).catch(() => {});
+  // #endregion
+  
+  // If empty string, return as-is
+  if (value.trim().length === 0) {
+    return value;
+  }
+  
+  try {
+    // Try to parse as JSON first
+    const parsed = JSON.parse(value);
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "langchain.ts:normalizeToolArgumentsString:parsed",
+        message: "Successfully parsed as JSON (langchain)",
+        data: { parsedType: typeof parsed },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "A",
+      }),
+    }).catch(() => {});
+    // #endregion
+    return parsed;
+  } catch (parseError) {
+    // CRITICAL: If parsing fails, check if it's the malformed pattern "key":"value" (missing braces)
+    // This is the exact pattern that causes "arguments":""query":"value"" in final JSON
+    // We need to catch this BEFORE it gets serialized
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "langchain.ts:normalizeToolArgumentsString:parseFailed",
+        message: "JSON parse failed (langchain), attempting fixes",
+        data: {
+          error: String(parseError),
+          valuePreview: value.substring(0, 200),
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "B",
+      }),
+    }).catch(() => {});
+    // #endregion
+    // If parsing fails, check if it looks like malformed JSON that we can fix
+    const trimmed = value.trim();
+    
+    // Handle case where string is double-quoted (e.g., ""key":"value"")
+    // This can happen when LangChain provides arguments that are incorrectly encoded
+    if (trimmed.startsWith('""') && trimmed.endsWith('""')) {
+      // Remove outer double quotes and try parsing the inner content
+      const inner = trimmed.slice(1, -1);
+      try {
+        return JSON.parse(inner);
+      } catch {
+        // If inner still fails, it might be a JSON object missing braces
+        // Try wrapping in braces: "key":"value" -> {"key":"value"}
+        if (inner.includes(':') && !inner.startsWith('{') && !inner.startsWith('[')) {
+          try {
+            return JSON.parse(`{${inner}}`);
+          } catch {
+            // If that also fails, try to fix common issues:
+            // 1. The inner might be "key":"value" which needs braces
+            // 2. Check if it's a valid JSON object structure
+            if (inner.match(/^"[^"]+":/)) {
+              // It looks like "key":... so try wrapping
+              try {
+                return JSON.parse(`{${inner}}`);
+              } catch {
+                // Last resort: return the original value
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Handle case where string looks like a JSON object property but missing outer braces
+    // Most common pattern: "query":"value" -> should be {"query":"value"}
+    // CRITICAL: This pattern causes "arguments":""query":"value"" in final JSON
+    // Try a simple approach: if it starts with " and has :, try wrapping in {}
+    if (trimmed.startsWith('"') && !trimmed.startsWith('"{') && trimmed.includes(':')) {
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location: "langchain.ts:normalizeToolArgumentsString:attemptSimpleWrap",
+          message: "Attempting simple wrap for malformed JSON pattern",
+          data: {
+            trimmed: trimmed.substring(0, 200),
+            trimmedLength: trimmed.length,
+            firstChar: trimmed[0],
+            hasColon: trimmed.includes(':'),
+            wrapped: `{${trimmed}}`.substring(0, 200),
+          },
+          timestamp: Date.now(),
+          sessionId: "debug-session",
+          runId: "run1",
+          hypothesisId: "B",
+        }),
+      }).catch(() => {});
+      // #endregion
+      
+      // Try wrapping the entire string in braces
+      try {
+        const wrapped = `{${trimmed}}`;
+        const parsed = JSON.parse(wrapped);
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "langchain.ts:normalizeToolArgumentsString:simpleWrapSuccess",
+            message: "Successfully fixed by simple wrapping",
+            data: {
+              original: trimmed.substring(0, 100),
+              wrapped: wrapped.substring(0, 100),
+              parsedType: typeof parsed,
+            },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            runId: "run1",
+            hypothesisId: "B",
+          }),
+        }).catch(() => {});
+        // #endregion
+        return parsed;
+      } catch (wrapError) {
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "langchain.ts:normalizeToolArgumentsString:simpleWrapFailed",
+            message: "Simple wrapping failed - this will cause JSON error",
+            data: {
+              error: String(wrapError),
+              errorMessage: wrapError instanceof Error ? wrapError.message : String(wrapError),
+              trimmed: trimmed.substring(0, 200),
+              wrapped: `{${trimmed}}`.substring(0, 200),
+            },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            runId: "run1",
+            hypothesisId: "B",
+          }),
+        }).catch(() => {});
+        // #endregion
+        
+        // If simple wrapping fails, try one more aggressive fix:
+        // The string might be "key":"value" but with escaped quotes or special characters
+        // Try to extract the key and value manually and reconstruct
+        try {
+          // More robust regex that handles quoted values with special characters
+          // Pattern: "key":"value" where value can contain escaped quotes, colons, etc.
+          const keyMatch = trimmed.match(/^"([^"]+)":\s*/);
+          if (keyMatch && keyMatch[1]) {
+            const key: string = keyMatch[1];
+            const afterKey = trimmed.substring(keyMatch[0].length);
+            
+            let val: any = '';
+            // Try to parse the value
+            if (afterKey.startsWith('"')) {
+              // Value is a quoted string - find the closing quote (handling escaped quotes)
+              let endQuoteIndex = -1;
+              let i = 1;
+              while (i < afterKey.length) {
+                if (afterKey[i] === '"' && afterKey[i - 1] !== '\\') {
+                  endQuoteIndex = i;
+                  break;
+                }
+                i++;
+              }
+              if (endQuoteIndex > 0) {
+                val = afterKey.substring(1, endQuoteIndex);
+                // Unescape the value
+                val = val.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+              } else {
+                // No closing quote found, take the rest
+                val = afterKey.substring(1);
+              }
+            } else {
+              // Value is not quoted - try to parse as JSON (number, boolean, null, etc.)
+              try {
+                val = JSON.parse(afterKey.trim());
+              } catch {
+                // If parsing fails, take the rest as string
+                val = afterKey.trim();
+              }
+            }
+            
+            const reconstructed: Record<string, any> = { [key]: val };
+            // #region agent log
+            fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                location: "langchain.ts:normalizeToolArgumentsString:reconstructSuccess",
+                message: "Successfully reconstructed from key-value pattern",
+                data: {
+                  original: trimmed.substring(0, 100),
+                  reconstructed: JSON.stringify(reconstructed).substring(0, 100),
+                  key,
+                  valuePreview: String(val).substring(0, 50),
+                },
+                timestamp: Date.now(),
+                sessionId: "debug-session",
+                runId: "run1",
+                hypothesisId: "B",
+              }),
+            }).catch(() => {});
+            // #endregion
+            return reconstructed;
+          }
+        } catch (reconstructError) {
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "langchain.ts:normalizeToolArgumentsString:reconstructFailed",
+              message: "Reconstruction failed",
+              data: {
+                error: String(reconstructError),
+                trimmed: trimmed.substring(0, 200),
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "B",
+            }),
+          }).catch(() => {});
+          // #endregion
+        }
+        
+        // If all fixes fail, the string is likely malformed in a way we can't fix
+        // Return as-is - it will be escaped by JSON.stringify but may still cause issues
+        // Log a warning that this might cause problems
+        console.warn('[Observa] Failed to normalize malformed arguments string:', trimmed.substring(0, 100));
+      }
+    }
+    
+    // Handle case where string looks like a JSON object property but missing outer braces
+    // Example: "query":"value" (should be {"query":"value"})
+    // This is a fallback check for cases that didn't match the simple wrap above
+    if (
+      trimmed.includes(':') &&
+      !trimmed.startsWith('{') &&
+      !trimmed.startsWith('[') &&
+      trimmed.startsWith('"')
+    ) {
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location: "langchain.ts:normalizeToolArgumentsString:attemptWrap",
+          message: "Attempting to wrap string in braces",
+          data: {
+            trimmed: trimmed.substring(0, 200),
+            matchesPattern: !!trimmed.match(/^"[^"]+":/),
+            wrapped: `{${trimmed}}`.substring(0, 200),
+          },
+          timestamp: Date.now(),
+          sessionId: "debug-session",
+          runId: "run1",
+          hypothesisId: "B",
+        }),
+      }).catch(() => {});
+      // #endregion
+      
+      // Check if it matches the pattern "key": (with optional value)
+      const keyPattern = /^"[^"]+":/;
+      if (keyPattern.test(trimmed)) {
+        try {
+          // Try wrapping in braces
+          const wrapped = `{${trimmed}}`;
+          const parsed = JSON.parse(wrapped);
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "langchain.ts:normalizeToolArgumentsString:wrapSuccess",
+              message: "Successfully wrapped and parsed",
+              data: { parsedType: typeof parsed },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "B",
+            }),
+          }).catch(() => {});
+          // #endregion
+          return parsed;
+        } catch (wrapError) {
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "langchain.ts:normalizeToolArgumentsString:wrapFailed",
+              message: "Wrapping in braces failed",
+              data: { error: String(wrapError), wrapped: `{${trimmed}}`.substring(0, 200) },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "B",
+            }),
+          }).catch(() => {});
+          // #endregion
+          // Fall through - return original value
+        }
+      }
+    }
+    
+    // If all parsing attempts fail, return the value as-is
+    // JSON.stringify will properly escape it
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "langchain.ts:normalizeToolArgumentsString:returnOriginal",
+        message: "Returning original value (langchain, all fixes failed)",
+        data: { valuePreview: value.substring(0, 200) },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "B",
+      }),
+    }).catch(() => {});
+    // #endregion
+    return value;
+  }
+}
+
 // Normalize additional_kwargs: parse nested JSON strings (like function_call.arguments)
 // to avoid double-encoding when the whole object is later JSON.stringify'd
 function normalizeAdditionalKwargs(kwargs: any): Record<string, any> | null {
@@ -110,13 +473,65 @@ function normalizeAdditionalKwargs(kwargs: any): Record<string, any> | null {
         const normalizedFc: Record<string, any> = { ...fc };
         
         if (typeof fc.arguments === 'string') {
-          try {
-            // Try to parse the arguments JSON string into an object
-            normalizedFc.arguments = JSON.parse(fc.arguments);
-          } catch {
-            // If parsing fails, keep as string but escape problematic chars
-            normalizedFc.arguments = fc.arguments;
-          }
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "langchain.ts:normalizeAdditionalKwargs:function_call.arguments",
+              message: "Found string arguments in function_call",
+              data: {
+                argsValue: fc.arguments.substring(0, 200),
+                argsLength: fc.arguments.length,
+                startsWithQuote: fc.arguments.trim().startsWith('"'),
+                hasColon: fc.arguments.includes(':'),
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "B",
+            }),
+          }).catch(() => {});
+          // #endregion
+          const normalized = normalizeToolArgumentsString(fc.arguments);
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "langchain.ts:normalizeAdditionalKwargs:function_call.arguments:after",
+              message: "After normalization",
+              data: {
+                normalizedType: typeof normalized,
+                normalizedPreview: typeof normalized === "string" ? normalized.substring(0, 200) : JSON.stringify(normalized).substring(0, 200),
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "B",
+            }),
+          }).catch(() => {});
+          // #endregion
+          normalizedFc.arguments = normalized;
+        } else if (fc.arguments !== undefined) {
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "langchain.ts:normalizeAdditionalKwargs:function_call.arguments:nonString",
+              message: "Arguments is not a string",
+              data: {
+                argsType: typeof fc.arguments,
+                argsPreview: JSON.stringify(fc.arguments).substring(0, 200),
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "B",
+            }),
+          }).catch(() => {});
+          // #endregion
         }
         result[key] = normalizedFc;
       } else if (key === 'tool_calls' && Array.isArray(value)) {
@@ -127,11 +542,7 @@ function normalizeAdditionalKwargs(kwargs: any): Record<string, any> | null {
           if (tc.function && typeof tc.function === 'object') {
             const fn = { ...tc.function };
             if (typeof fn.arguments === 'string') {
-              try {
-                fn.arguments = JSON.parse(fn.arguments);
-              } catch {
-                // Keep as string if parse fails
-              }
+              fn.arguments = normalizeToolArgumentsString(fn.arguments);
             }
             normalized.function = fn;
           }
