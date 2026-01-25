@@ -489,6 +489,45 @@ function normalizeToolArgumentsString(value: string): any {
       }),
     }).catch(() => {});
     // #endregion
+    
+    // If we get here, all fixes failed
+    // CRITICAL: If the value looks like malformed JSON (starts with quote and has colon),
+    // we MUST fix it or it will cause JSON parsing errors downstream
+    // Last resort: try to extract key-value and reconstruct
+    if (trimmed.startsWith('"') && trimmed.includes(':') && !trimmed.startsWith('"{')) {
+      const keyValueMatch = trimmed.match(/^"([^"]+)"\s*:\s*(.+)$/);
+      if (keyValueMatch && keyValueMatch[1]) {
+        const key: string = keyValueMatch[1];
+        let val: any = keyValueMatch[2] || '';
+        if (val.startsWith('"') && val.endsWith('"')) {
+          val = val.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        }
+        try {
+          const reconstructed = { [key]: val };
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "langchain.ts:normalizeToolArgumentsString:lastResortFix",
+              message: "Last resort fix succeeded",
+              data: { key, valuePreview: typeof val === 'string' ? val.substring(0, 100) : val },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "LAST_RESORT",
+            }),
+          }).catch(() => {});
+          // #endregion
+          return reconstructed;
+        } catch {
+          // If even this fails, return empty object to prevent JSON errors
+          return {};
+        }
+      }
+    }
+    
+    // If it doesn't match the pattern, return as-is (might be a plain string)
     return value;
   }
 }
