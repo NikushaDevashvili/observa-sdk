@@ -124,9 +124,15 @@ function normalizeToolArgumentsString(value: string): any {
     return value;
   }
   
-  try {
-    // Try to parse as JSON first
-    const parsed = JSON.parse(value);
+  const trimmed = value.trim();
+  
+  // Following Langfuse's approach: only parse if it looks like valid JSON
+  // Check if it starts with { or [ (valid JSON object/array)
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      // Try to parse as JSON first
+      const parsed = JSON.parse(value);
     // #region agent log
     fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
       method: "POST",
@@ -142,21 +148,52 @@ function normalizeToolArgumentsString(value: string): any {
       }),
     }).catch(() => {});
     // #endregion
-    return parsed;
-  } catch (parseError) {
-    // CRITICAL: If parsing fails, check if it's the malformed pattern "key":"value" (missing braces)
-    // This is the exact pattern that causes "arguments":""query":"value"" in final JSON
-    // We need to catch this BEFORE it gets serialized
+      return parsed;
+    } catch (parseError) {
+      // If it looks like JSON but fails to parse, log warning and return as-is
+      // Following Langfuse's approach: don't try to fix, just pass through
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location: "langchain.ts:normalizeToolArgumentsString:parseFailedButLooksLikeJSON",
+          message: "WARNING: Looks like JSON but failed to parse - returning as-is (following Langfuse approach)",
+          data: {
+            error: String(parseError),
+            valuePreview: value.substring(0, 200),
+          },
+          timestamp: Date.now(),
+          sessionId: "debug-session",
+          runId: "run1",
+          hypothesisId: "A",
+        }),
+      }).catch(() => {});
+      // #endregion
+      console.warn('[Observa] Failed to parse arguments JSON string (looks like JSON but invalid):', trimmed.substring(0, 100));
+      return value; // Return as-is to avoid breaking
+    }
+  }
+  
+  // If it doesn't look like valid JSON, check if it's the malformed pattern
+  // Pattern: "key":"value" (missing outer braces) - this is the problematic case
+  if (
+    trimmed.startsWith('"') &&
+    !trimmed.startsWith('"{') &&
+    trimmed.includes(':') &&
+    trimmed.length > 3
+  ) {
+    // This is the malformed pattern that causes "arguments":""query":"value"" in final JSON
+    // We need to fix it by wrapping in braces
     // #region agent log
     fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        location: "langchain.ts:normalizeToolArgumentsString:parseFailed",
-        message: "JSON parse failed (langchain), attempting fixes",
+        location: "langchain.ts:normalizeToolArgumentsString:malformedPattern",
+        message: "Detected malformed pattern - attempting fix",
         data: {
-          error: String(parseError),
-          valuePreview: value.substring(0, 200),
+          valuePreview: trimmed.substring(0, 200),
         },
         timestamp: Date.now(),
         sessionId: "debug-session",
@@ -165,8 +202,6 @@ function normalizeToolArgumentsString(value: string): any {
       }),
     }).catch(() => {});
     // #endregion
-    // If parsing fails, check if it looks like malformed JSON that we can fix
-    const trimmed = value.trim();
     
     // Handle case where string is double-quoted (e.g., ""key":"value"")
     // This can happen when LangChain provides arguments that are incorrectly encoded
