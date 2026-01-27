@@ -1672,6 +1672,11 @@ export class Observa {
       conversationId?: string;
       sessionId?: string;
       userId?: string;
+      // CRITICAL: Support for LangChain handler to pass chain data
+      chainType?: string;
+      numPrompts?: number;
+      attributes?: Record<string, any>;
+      attributes_json?: string;
     } = {}
   ): string {
     // End previous trace if active
@@ -1695,6 +1700,9 @@ export class Observa {
           instanceId: this.instanceId,
           currentTraceId: this.currentTraceId,
           rootSpanId: this.rootSpanId,
+          hasChainType: !!options.chainType,
+          hasNumPrompts: options.numPrompts !== undefined,
+          hasAttributesJson: !!options.attributes_json,
         },
         timestamp: Date.now(),
         sessionId: "debug-session",
@@ -1704,6 +1712,54 @@ export class Observa {
     }).catch(() => {});
     // #endregion
 
+    // CRITICAL: Build trace_start attributes with chain data if provided
+    // If attributes_json is provided, parse it and merge with other data
+    // Otherwise, build from individual parameters
+    let traceStartAttributes: any = {
+      name: options.name || null,
+      metadata: options.metadata || null,
+    };
+
+    // If attributes_json is provided, parse it and use it (preferred)
+    if (options.attributes_json) {
+      try {
+        const parsed = JSON.parse(options.attributes_json);
+        if (parsed && typeof parsed === "object" && parsed.trace_start) {
+          traceStartAttributes = {
+            ...traceStartAttributes,
+            ...parsed.trace_start, // Merge parsed data
+          };
+        }
+      } catch (error) {
+        console.warn(
+          "[Observa] Failed to parse attributes_json in startTrace, using individual parameters:",
+          error
+        );
+        // Fall through to use individual parameters
+      }
+    }
+
+    // If attributes object is provided, extract trace_start from it
+    if (options.attributes && typeof options.attributes === "object") {
+      if (options.attributes.trace_start) {
+        traceStartAttributes = {
+          ...traceStartAttributes,
+          ...options.attributes.trace_start,
+        };
+      }
+    }
+
+    // Add chain-specific data if provided (merge with parsed data)
+    if (options.chainType) {
+      traceStartAttributes.chain_type = options.chainType;
+    }
+    if (options.numPrompts !== undefined && options.numPrompts !== null) {
+      traceStartAttributes.num_prompts = options.numPrompts;
+    }
+    if (!traceStartAttributes.created_at) {
+      traceStartAttributes.created_at = new Date().toISOString();
+    }
+
     this.addEvent({
       event_type: "trace_start",
       span_id: this.rootSpanId,
@@ -1712,14 +1768,122 @@ export class Observa {
       session_id: options.sessionId || null,
       user_id: options.userId || null,
       attributes: {
-        trace_start: {
-          name: options.name || null,
-          metadata: options.metadata || null,
-        },
+        trace_start: traceStartAttributes,
       },
     });
 
     return this.currentTraceId;
+  }
+
+  /**
+   * Track trace_start event directly (for LangChain handler compatibility)
+   * This method allows the LangChain handler to send trace_start events with chain data
+   */
+  trackTraceStart(payload: {
+    spanId: string;
+    parentSpanId: string | null;
+    traceId: string | null;
+    attributes?: Record<string, any>;
+    attributes_json?: string;
+  }): void {
+    // If no trace is active, create one
+    if (!this.currentTraceId && payload.traceId) {
+      this.currentTraceId = payload.traceId;
+      this.rootSpanId = payload.spanId;
+      this.spanStack = [this.rootSpanId];
+      this.traceStartTime = Date.now();
+    }
+
+    // Parse attributes_json if provided
+    let traceStartAttributes: any = {};
+    if (payload.attributes_json) {
+      try {
+        const parsed = JSON.parse(payload.attributes_json);
+        if (parsed && typeof parsed === "object" && parsed.trace_start) {
+          traceStartAttributes = parsed.trace_start;
+        } else if (parsed && typeof parsed === "object") {
+          traceStartAttributes = parsed;
+        }
+      } catch (error) {
+        console.warn(
+          "[Observa] Failed to parse attributes_json in trackTraceStart:",
+          error
+        );
+      }
+    }
+
+    // Merge with attributes object if provided
+    if (payload.attributes && typeof payload.attributes === "object") {
+      if (payload.attributes.trace_start) {
+        traceStartAttributes = {
+          ...traceStartAttributes,
+          ...payload.attributes.trace_start,
+        };
+      } else {
+        traceStartAttributes = {
+          ...traceStartAttributes,
+          ...payload.attributes,
+        };
+      }
+    }
+
+    // Ensure we have at least some data
+    if (Object.keys(traceStartAttributes).length === 0) {
+      traceStartAttributes = {
+        created_at: new Date().toISOString(),
+      };
+    } else if (!traceStartAttributes.created_at) {
+      traceStartAttributes.created_at = new Date().toISOString();
+    }
+
+    this.addEvent({
+      event_type: "trace_start",
+      span_id: payload.spanId,
+      parent_span_id: payload.parentSpanId,
+      trace_id: payload.traceId || this.currentTraceId || null,
+      attributes: {
+        trace_start: traceStartAttributes,
+      },
+    });
+  }
+
+  /**
+   * Send a canonical event directly (for LangChain handler compatibility)
+   * This allows the handler to send events that aren't covered by specific track methods
+   */
+  sendEvent(event: {
+    event_type: string;
+    span_id: string;
+    parent_span_id: string | null;
+    trace_id: string | null;
+    attributes?: Record<string, any>;
+    attributes_json?: string;
+    timestamp?: string;
+  }): void {
+    // Parse attributes_json if provided
+    let attributes: any = event.attributes || {};
+    if (event.attributes_json) {
+      try {
+        const parsed = JSON.parse(event.attributes_json);
+        if (parsed && typeof parsed === "object") {
+          attributes = parsed;
+        }
+      } catch (error) {
+        console.warn(
+          "[Observa] Failed to parse attributes_json in sendEvent:",
+          error
+        );
+      }
+    }
+
+    this.addEvent({
+      event_type: event.event_type as any,
+      span_id: event.span_id,
+      parent_span_id: event.parent_span_id,
+      trace_id: event.trace_id || this.currentTraceId || null,
+      timestamp: event.timestamp || new Date().toISOString(),
+      attributes,
+    });
   }
 
   /**
