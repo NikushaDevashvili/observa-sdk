@@ -408,12 +408,12 @@ function formatBeautifulLog(trace: TraceData) {
   const formatValue = (
     label: string,
     value: any,
-    color: string = colors.cyan
+    color: string = colors.cyan,
   ) => `${colors.dim}${label}:${colors.reset} ${color}${value}${colors.reset}`;
 
   console.log("\n" + "═".repeat(90));
   console.log(
-    `${colors.bright}${colors.blue}🔍 OBSERVA TRACE${colors.reset} ${colors.gray}${trace.traceId}${colors.reset}`
+    `${colors.bright}${colors.blue}🔍 OBSERVA TRACE${colors.reset} ${colors.gray}${trace.traceId}${colors.reset}`,
   );
   console.log("─".repeat(90));
 
@@ -427,8 +427,8 @@ function formatBeautifulLog(trace: TraceData) {
     `  ${formatValue(
       "Timestamp",
       new Date(trace.timestamp).toLocaleString(),
-      colors.gray
-    )}`
+      colors.gray,
+    )}`,
   );
   if (trace.model)
     console.log(`  ${formatValue("Model", trace.model, colors.yellow)}`);
@@ -447,11 +447,11 @@ function formatBeautifulLog(trace: TraceData) {
 
   console.log(`\n${colors.bright}⚡ Performance${colors.reset}`);
   console.log(
-    `  ${formatValue("Latency", `${trace.latencyMs}ms`, colors.green)}`
+    `  ${formatValue("Latency", `${trace.latencyMs}ms`, colors.green)}`,
   );
   if (trace.timeToFirstTokenMs != null) {
     console.log(
-      `  ${formatValue("TTFB", `${trace.timeToFirstTokenMs}ms`, colors.cyan)}`
+      `  ${formatValue("TTFB", `${trace.timeToFirstTokenMs}ms`, colors.cyan)}`,
     );
   }
   if (trace.streamingDurationMs != null) {
@@ -459,8 +459,8 @@ function formatBeautifulLog(trace: TraceData) {
       `  ${formatValue(
         "Streaming",
         `${trace.streamingDurationMs}ms`,
-        colors.cyan
-      )}`
+        colors.cyan,
+      )}`,
     );
   }
 
@@ -474,8 +474,8 @@ function formatBeautifulLog(trace: TraceData) {
       `  ${formatValue(
         "Total",
         trace.tokensTotal,
-        colors.bright + colors.yellow
-      )}`
+        colors.bright + colors.yellow,
+      )}`,
     );
 
   console.log(`\n${colors.bright}📤 Response${colors.reset}`);
@@ -483,8 +483,8 @@ function formatBeautifulLog(trace: TraceData) {
     `  ${formatValue(
       "Length",
       `${trace.responseLength.toLocaleString()} chars`,
-      colors.cyan
-    )}`
+      colors.cyan,
+    )}`,
   );
   if (trace.status != null) {
     const statusColor =
@@ -493,13 +493,13 @@ function formatBeautifulLog(trace: TraceData) {
       `  ${formatValue(
         "Status",
         `${trace.status} ${trace.statusText ?? ""}`,
-        statusColor
-      )}`
+        statusColor,
+      )}`,
     );
   }
   if (trace.finishReason)
     console.log(
-      `  ${formatValue("Finish", trace.finishReason, colors.magenta)}`
+      `  ${formatValue("Finish", trace.finishReason, colors.magenta)}`,
     );
 
   const respPreview =
@@ -512,8 +512,7 @@ function formatBeautifulLog(trace: TraceData) {
   if (trace.metadata && Object.keys(trace.metadata).length) {
     console.log(`\n${colors.bright}📎 Metadata${colors.reset}`);
     for (const [k, v] of Object.entries(trace.metadata)) {
-      const valueStr =
-        typeof v === "object" ? safeJsonStringify(v) : String(v);
+      const valueStr = typeof v === "object" ? safeJsonStringify(v) : String(v);
       console.log(`  ${formatValue(k, valueStr, colors.gray)}`);
     }
   }
@@ -525,7 +524,7 @@ function formatBeautifulLog(trace: TraceData) {
 function escapeControlChars(value: string): string {
   const withoutLoneSurrogates = value.replace(
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
-    "\uFFFD"
+    "\uFFFD",
   );
 
   return withoutLoneSurrogates.replace(
@@ -551,7 +550,7 @@ function escapeControlChars(value: string): string {
           return `\\u${code}`;
         }
       }
-    }
+    },
   );
 }
 
@@ -565,7 +564,7 @@ function truncateString(value: string, maxLength?: number): string {
 function sanitizeAttributesForStorage(
   value: any,
   seen: WeakSet<object> = new WeakSet(),
-  maxStringLength?: number
+  maxStringLength?: number,
 ): any {
   if (value === null || value === undefined) return value;
 
@@ -578,72 +577,90 @@ function sanitizeAttributesForStorage(
     if (
       trimmed.startsWith('"') &&
       !trimmed.startsWith('"{') &&
-      trimmed.includes(':') &&
+      trimmed.includes(":") &&
       trimmed.length > 3 // At least "a":b
     ) {
       // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          location: "index.ts:sanitizeAttributesForStorage:safetyCheck",
-          message: "Safety check triggered - found malformed JSON string",
-          data: {
-            stringValue: trimmed.substring(0, 200),
-            stringLength: trimmed.length,
-          },
-          timestamp: Date.now(),
-          sessionId: "debug-session",
-          runId: "run1",
-          hypothesisId: "F",
-        }),
-      }).catch(() => {});
-      // #endregion
-      
-      // This might be a malformed JSON object string - try to normalize it
-      try {
-        const normalized = normalizeToolArguments(value);
-        // If normalization succeeded and returned an object, use that instead
-        if (typeof normalized !== "string") {
-          // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              location: "index.ts:sanitizeAttributesForStorage:safetyCheckSuccess",
-              message: "Safety check fixed malformed string",
-              data: {
-                original: trimmed.substring(0, 100),
-                normalizedType: typeof normalized,
-                normalizedPreview: JSON.stringify(normalized).substring(0, 100),
-              },
-              timestamp: Date.now(),
-              sessionId: "debug-session",
-              runId: "run1",
-              hypothesisId: "F",
-            }),
-          }).catch(() => {});
-          // #endregion
-          return sanitizeAttributesForStorage(normalized, seen, maxStringLength);
-        }
-      } catch (e) {
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      fetch(
+        "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+        {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            location: "index.ts:sanitizeAttributesForStorage:safetyCheckFailed",
-            message: "Safety check failed to fix malformed string",
+            location: "index.ts:sanitizeAttributesForStorage:safetyCheck",
+            message: "Safety check triggered - found malformed JSON string",
             data: {
-              error: String(e),
               stringValue: trimmed.substring(0, 200),
+              stringLength: trimmed.length,
             },
             timestamp: Date.now(),
             sessionId: "debug-session",
             runId: "run1",
             hypothesisId: "F",
           }),
-        }).catch(() => {});
+        },
+      ).catch(() => {});
+      // #endregion
+
+      // This might be a malformed JSON object string - try to normalize it
+      try {
+        const normalized = normalizeToolArguments(value);
+        // If normalization succeeded and returned an object, use that instead
+        if (typeof normalized !== "string") {
+          // #region agent log
+          fetch(
+            "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                location:
+                  "index.ts:sanitizeAttributesForStorage:safetyCheckSuccess",
+                message: "Safety check fixed malformed string",
+                data: {
+                  original: trimmed.substring(0, 100),
+                  normalizedType: typeof normalized,
+                  normalizedPreview: JSON.stringify(normalized).substring(
+                    0,
+                    100,
+                  ),
+                },
+                timestamp: Date.now(),
+                sessionId: "debug-session",
+                runId: "run1",
+                hypothesisId: "F",
+              }),
+            },
+          ).catch(() => {});
+          // #endregion
+          return sanitizeAttributesForStorage(
+            normalized,
+            seen,
+            maxStringLength,
+          );
+        }
+      } catch (e) {
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location:
+                "index.ts:sanitizeAttributesForStorage:safetyCheckFailed",
+              message: "Safety check failed to fix malformed string",
+              data: {
+                error: String(e),
+                stringValue: trimmed.substring(0, 200),
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "F",
+            }),
+          },
+        ).catch(() => {});
         // #endregion
         // If normalization fails, proceed with original string
       }
@@ -665,7 +682,7 @@ function sanitizeAttributesForStorage(
 
   if (Array.isArray(value)) {
     return value.map((item) =>
-      sanitizeAttributesForStorage(item, seen, maxStringLength)
+      sanitizeAttributesForStorage(item, seen, maxStringLength),
     );
   }
 
@@ -683,7 +700,7 @@ function sanitizeAttributesForStorage(
   }
   if (value instanceof Set) {
     return Array.from(value.values()).map((val) =>
-      sanitizeAttributesForStorage(val, seen, maxStringLength)
+      sanitizeAttributesForStorage(val, seen, maxStringLength),
     );
   }
 
@@ -698,22 +715,39 @@ function sanitizeAttributesForStorage(
       // Special handling for function_call.arguments and tool_calls[].function.arguments
       // to catch any malformed strings that bypassed normalization
       if (
-        (key === "function_call" && val && typeof val === "object" && "arguments" in val) ||
+        (key === "function_call" &&
+          val &&
+          typeof val === "object" &&
+          "arguments" in val) ||
         (key === "additional_kwargs" && val && typeof val === "object")
       ) {
         // Recursively sanitize, but arguments will be caught by the string check above
-        sanitized[key] = sanitizeAttributesForStorage(val, seen, maxStringLength);
+        sanitized[key] = sanitizeAttributesForStorage(
+          val,
+          seen,
+          maxStringLength,
+        );
       } else if (key === "tool_calls" && Array.isArray(val)) {
         // Handle tool_calls array - each may have function.arguments
         sanitized[key] = val.map((tc: any) => {
-          if (tc && typeof tc === "object" && tc.function && typeof tc.function === "object" && "arguments" in tc.function) {
+          if (
+            tc &&
+            typeof tc === "object" &&
+            tc.function &&
+            typeof tc.function === "object" &&
+            "arguments" in tc.function
+          ) {
             // The arguments will be caught by the string check in sanitizeAttributesForStorage
             return sanitizeAttributesForStorage(tc, seen, maxStringLength);
           }
           return sanitizeAttributesForStorage(tc, seen, maxStringLength);
         });
       } else {
-        sanitized[key] = sanitizeAttributesForStorage(val, seen, maxStringLength);
+        sanitized[key] = sanitizeAttributesForStorage(
+          val,
+          seen,
+          maxStringLength,
+        );
       }
     }
     return sanitized;
@@ -728,7 +762,7 @@ function sanitizeAttributesForStorage(
 
 function safeJsonStringify(
   value: unknown,
-  options: { maxStringLength?: number } = {}
+  options: { maxStringLength?: number } = {},
 ): string {
   const seen = new WeakSet<object>();
   const maxStringLength = options.maxStringLength;
@@ -757,10 +791,7 @@ function safeJsonStringify(
       seen.add(val);
 
       if (val instanceof Map) {
-        return Array.from(val.entries()).map(([key, mapVal]) => [
-          key,
-          mapVal,
-        ]);
+        return Array.from(val.entries()).map(([key, mapVal]) => [key, mapVal]);
       }
       if (val instanceof Set) {
         return Array.from(val.values());
@@ -776,23 +807,23 @@ function toPlainJson<T>(value: T, maxStringLength?: number): T {
     const options = maxStringLength !== undefined ? { maxStringLength } : {};
     const stringified = safeJsonStringify(value, options);
     const parsed = JSON.parse(stringified) as T;
-    
+
     // CRITICAL: Ensure arguments fields remain objects, not strings
     // This prevents cases where arguments objects get converted to malformed strings
     const ensureArgumentsAreObjects = (obj: any): any => {
       if (obj === null || obj === undefined) return obj;
-      if (typeof obj === 'string') {
+      if (typeof obj === "string") {
         // If a string looks like malformed JSON arguments, try to fix it
         const trimmed = obj.trim();
         if (
           trimmed.startsWith('"') &&
           !trimmed.startsWith('"{') &&
-          trimmed.includes(':') &&
+          trimmed.includes(":") &&
           trimmed.length > 3
         ) {
           try {
             const fixed = normalizeToolArguments(obj);
-            if (typeof fixed !== 'string') {
+            if (typeof fixed !== "string") {
               return fixed;
             }
           } catch {
@@ -804,26 +835,38 @@ function toPlainJson<T>(value: T, maxStringLength?: number): T {
       if (Array.isArray(obj)) {
         return obj.map(ensureArgumentsAreObjects);
       }
-      if (typeof obj === 'object') {
+      if (typeof obj === "object") {
         const result: Record<string, any> = {};
         for (const [key, val] of Object.entries(obj)) {
-          if (key === 'arguments' && typeof val === 'string') {
+          if (key === "arguments" && typeof val === "string") {
             // Arguments should be an object, not a string
             const normalized = normalizeToolArguments(val);
-            result[key] = typeof normalized === 'string' ? val : normalized;
-          } else if (key === 'function_call' && val && typeof val === 'object' && 'arguments' in val) {
+            result[key] = typeof normalized === "string" ? val : normalized;
+          } else if (
+            key === "function_call" &&
+            val &&
+            typeof val === "object" &&
+            "arguments" in val
+          ) {
             result[key] = {
               ...val,
-              arguments: typeof val.arguments === 'string' 
-                ? (normalizeToolArguments(val.arguments) || val.arguments)
-                : ensureArgumentsAreObjects(val.arguments)
+              arguments:
+                typeof val.arguments === "string"
+                  ? normalizeToolArguments(val.arguments) || val.arguments
+                  : ensureArgumentsAreObjects(val.arguments),
             };
-          } else if (key === 'function' && val && typeof val === 'object' && 'arguments' in val) {
+          } else if (
+            key === "function" &&
+            val &&
+            typeof val === "object" &&
+            "arguments" in val
+          ) {
             result[key] = {
               ...val,
-              arguments: typeof val.arguments === 'string'
-                ? (normalizeToolArguments(val.arguments) || val.arguments)
-                : ensureArgumentsAreObjects(val.arguments)
+              arguments:
+                typeof val.arguments === "string"
+                  ? normalizeToolArguments(val.arguments) || val.arguments
+                  : ensureArgumentsAreObjects(val.arguments),
             };
           } else {
             result[key] = ensureArgumentsAreObjects(val);
@@ -833,7 +876,7 @@ function toPlainJson<T>(value: T, maxStringLength?: number): T {
       }
       return obj;
     };
-    
+
     return ensureArgumentsAreObjects(parsed) as T;
   } catch {
     return value;
@@ -850,7 +893,10 @@ function normalizeToolArguments(value: unknown): unknown {
       message: "normalizeToolArguments called",
       data: {
         valueType: typeof value,
-        valuePreview: typeof value === "string" ? value.substring(0, 200) : String(value).substring(0, 200),
+        valuePreview:
+          typeof value === "string"
+            ? value.substring(0, 200)
+            : String(value).substring(0, 200),
         valueLength: typeof value === "string" ? value.length : 0,
       },
       timestamp: Date.now(),
@@ -860,16 +906,16 @@ function normalizeToolArguments(value: unknown): unknown {
     }),
   }).catch(() => {});
   // #endregion
-  
+
   if (typeof value !== "string") {
     return value;
   }
-  
+
   // If empty string, return as-is
   if (value.trim().length === 0) {
     return value;
   }
-  
+
   try {
     // Try to parse as JSON first
     const parsed = JSON.parse(value);
@@ -880,7 +926,10 @@ function normalizeToolArguments(value: unknown): unknown {
       body: JSON.stringify({
         location: "index.ts:normalizeToolArguments:parsed",
         message: "Successfully parsed as JSON",
-        data: { parsedType: typeof parsed, parsedPreview: JSON.stringify(parsed).substring(0, 200) },
+        data: {
+          parsedType: typeof parsed,
+          parsedPreview: JSON.stringify(parsed).substring(0, 200),
+        },
         timestamp: Date.now(),
         sessionId: "debug-session",
         runId: "run1",
@@ -902,7 +951,7 @@ function normalizeToolArguments(value: unknown): unknown {
           valuePreview: value.substring(0, 200),
           startsWithDoubleQuote: value.trim().startsWith('""'),
           endsWithDoubleQuote: value.trim().endsWith('""'),
-          hasColon: value.includes(':'),
+          hasColon: value.includes(":"),
           startsWithQuote: value.trim().startsWith('"'),
         },
         timestamp: Date.now(),
@@ -914,7 +963,7 @@ function normalizeToolArguments(value: unknown): unknown {
     // #endregion
     // If parsing fails, check if it looks like malformed JSON that we can fix
     const trimmed = value.trim();
-    
+
     // Handle case where string is double-quoted (e.g., ""key":"value"")
     // This can happen when LangChain provides arguments that are incorrectly encoded
     if (trimmed.startsWith('""') && trimmed.endsWith('""')) {
@@ -925,7 +974,11 @@ function normalizeToolArguments(value: unknown): unknown {
       } catch {
         // If inner still fails, it might be a JSON object missing braces
         // Try wrapping in braces: "key":"value" -> {"key":"value"}
-        if (inner.includes(':') && !inner.startsWith('{') && !inner.startsWith('[')) {
+        if (
+          inner.includes(":") &&
+          !inner.startsWith("{") &&
+          !inner.startsWith("[")
+        ) {
           try {
             return JSON.parse(`{${inner}}`);
           } catch {
@@ -944,70 +997,30 @@ function normalizeToolArguments(value: unknown): unknown {
         }
       }
     }
-    
+
     // Handle case where string looks like a JSON object property but missing outer braces
     // Most common pattern: "query":"value" -> should be {"query":"value"}
     // CRITICAL: This pattern causes "arguments":""query":"value"" in final JSON
     // Try a simple approach: if it starts with " and has :, try wrapping in {}
-    if (trimmed.startsWith('"') && !trimmed.startsWith('"{') && trimmed.includes(':')) {
+    if (
+      trimmed.startsWith('"') &&
+      !trimmed.startsWith('"{') &&
+      trimmed.includes(":")
+    ) {
       // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          location: "index.ts:normalizeToolArguments:attemptSimpleWrap",
-          message: "Attempting simple wrap for malformed JSON pattern",
-          data: {
-            trimmed: trimmed.substring(0, 200),
-            trimmedLength: trimmed.length,
-            firstChar: trimmed[0],
-            hasColon: trimmed.includes(':'),
-            wrapped: `{${trimmed}}`.substring(0, 200),
-          },
-          timestamp: Date.now(),
-          sessionId: "debug-session",
-          runId: "run1",
-          hypothesisId: "B",
-        }),
-      }).catch(() => {});
-      // #endregion
-      
-      // Try wrapping the entire string in braces
-      try {
-        const wrapped = `{${trimmed}}`;
-        const parsed = JSON.parse(wrapped);
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+      fetch(
+        "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+        {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            location: "index.ts:normalizeToolArguments:simpleWrapSuccess",
-            message: "Successfully fixed by simple wrapping",
+            location: "index.ts:normalizeToolArguments:attemptSimpleWrap",
+            message: "Attempting simple wrap for malformed JSON pattern",
             data: {
-              original: trimmed.substring(0, 100),
-              wrapped: wrapped.substring(0, 100),
-              parsedType: typeof parsed,
-            },
-            timestamp: Date.now(),
-            sessionId: "debug-session",
-            runId: "run1",
-            hypothesisId: "B",
-          }),
-        }).catch(() => {});
-        // #endregion
-        return parsed;
-      } catch (wrapError) {
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "index.ts:normalizeToolArguments:simpleWrapFailed",
-            message: "Simple wrapping failed - this will cause JSON error",
-            data: {
-              error: String(wrapError),
-              errorMessage: wrapError instanceof Error ? wrapError.message : String(wrapError),
               trimmed: trimmed.substring(0, 200),
+              trimmedLength: trimmed.length,
+              firstChar: trimmed[0],
+              hasColon: trimmed.includes(":"),
               wrapped: `{${trimmed}}`.substring(0, 200),
             },
             timestamp: Date.now(),
@@ -1015,9 +1028,65 @@ function normalizeToolArguments(value: unknown): unknown {
             runId: "run1",
             hypothesisId: "B",
           }),
-        }).catch(() => {});
+        },
+      ).catch(() => {});
+      // #endregion
+
+      // Try wrapping the entire string in braces
+      try {
+        const wrapped = `{${trimmed}}`;
+        const parsed = JSON.parse(wrapped);
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "index.ts:normalizeToolArguments:simpleWrapSuccess",
+              message: "Successfully fixed by simple wrapping",
+              data: {
+                original: trimmed.substring(0, 100),
+                wrapped: wrapped.substring(0, 100),
+                parsedType: typeof parsed,
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "B",
+            }),
+          },
+        ).catch(() => {});
         // #endregion
-        
+        return parsed;
+      } catch (wrapError) {
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "index.ts:normalizeToolArguments:simpleWrapFailed",
+              message: "Simple wrapping failed - this will cause JSON error",
+              data: {
+                error: String(wrapError),
+                errorMessage:
+                  wrapError instanceof Error
+                    ? wrapError.message
+                    : String(wrapError),
+                trimmed: trimmed.substring(0, 200),
+                wrapped: `{${trimmed}}`.substring(0, 200),
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "run1",
+              hypothesisId: "B",
+            }),
+          },
+        ).catch(() => {});
+        // #endregion
+
         // If simple wrapping fails, try one more aggressive fix:
         // The string might be "key":"value" but with escaped quotes or special characters
         // Try to extract the key and value manually and reconstruct
@@ -1029,15 +1098,15 @@ function normalizeToolArguments(value: unknown): unknown {
           if (keyMatch && keyMatch[1]) {
             const key: string = keyMatch[1];
             const afterKey = trimmed.substring(keyMatch[0].length);
-            
-            let val: any = '';
+
+            let val: any = "";
             // Try to parse the value
             if (afterKey.startsWith('"')) {
               // Value is a quoted string - find the closing quote (handling escaped quotes)
               let endQuoteIndex = -1;
               let i = 1;
               while (i < afterKey.length) {
-                if (afterKey[i] === '"' && afterKey[i - 1] !== '\\') {
+                if (afterKey[i] === '"' && afterKey[i - 1] !== "\\") {
                   endQuoteIndex = i;
                   break;
                 }
@@ -1046,7 +1115,7 @@ function normalizeToolArguments(value: unknown): unknown {
               if (endQuoteIndex > 0) {
                 val = afterKey.substring(1, endQuoteIndex);
                 // Unescape the value
-                val = val.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                val = val.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
               } else {
                 // No closing quote found, take the rest
                 val = afterKey.substring(1);
@@ -1060,87 +1129,103 @@ function normalizeToolArguments(value: unknown): unknown {
                 val = afterKey.trim();
               }
             }
-            
+
             const reconstructed: Record<string, any> = { [key]: val };
             // #region agent log
-            fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+            fetch(
+              "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  location:
+                    "index.ts:normalizeToolArguments:reconstructSuccess",
+                  message: "Successfully reconstructed from key-value pattern",
+                  data: {
+                    original: trimmed.substring(0, 100),
+                    reconstructed: JSON.stringify(reconstructed).substring(
+                      0,
+                      100,
+                    ),
+                    key,
+                    valuePreview: String(val).substring(0, 50),
+                  },
+                  timestamp: Date.now(),
+                  sessionId: "debug-session",
+                  runId: "run1",
+                  hypothesisId: "B",
+                }),
+              },
+            ).catch(() => {});
+            // #endregion
+            return reconstructed;
+          }
+        } catch (reconstructError) {
+          // #region agent log
+          fetch(
+            "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+            {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                location: "index.ts:normalizeToolArguments:reconstructSuccess",
-                message: "Successfully reconstructed from key-value pattern",
+                location: "index.ts:normalizeToolArguments:reconstructFailed",
+                message: "Reconstruction failed",
                 data: {
-                  original: trimmed.substring(0, 100),
-                  reconstructed: JSON.stringify(reconstructed).substring(0, 100),
-                  key,
-                  valuePreview: String(val).substring(0, 50),
+                  error: String(reconstructError),
+                  trimmed: trimmed.substring(0, 200),
                 },
                 timestamp: Date.now(),
                 sessionId: "debug-session",
                 runId: "run1",
                 hypothesisId: "B",
               }),
-            }).catch(() => {});
-            // #endregion
-            return reconstructed;
-          }
-        } catch (reconstructError) {
-          // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              location: "index.ts:normalizeToolArguments:reconstructFailed",
-              message: "Reconstruction failed",
-              data: {
-                error: String(reconstructError),
-                trimmed: trimmed.substring(0, 200),
-              },
-              timestamp: Date.now(),
-              sessionId: "debug-session",
-              runId: "run1",
-              hypothesisId: "B",
-            }),
-          }).catch(() => {});
+            },
+          ).catch(() => {});
           // #endregion
         }
-        
+
         // If all fixes fail, the string is likely malformed in a way we can't fix
         // Return as-is - it will be escaped by JSON.stringify but may still cause issues
         // Log a warning that this might cause problems
-        console.warn('[Observa] Failed to normalize malformed arguments string:', trimmed.substring(0, 100));
+        console.warn(
+          "[Observa] Failed to normalize malformed arguments string:",
+          trimmed.substring(0, 100),
+        );
       }
     }
-    
+
     // Handle case where string looks like a JSON object property but missing outer braces
     // Example: "query":"value" (should be {"query":"value"})
     // Only attempt this if it clearly looks like a JSON object (has colon, starts with quote)
     if (
-      trimmed.includes(':') &&
-      !trimmed.startsWith('{') &&
-      !trimmed.startsWith('[') &&
+      trimmed.includes(":") &&
+      !trimmed.startsWith("{") &&
+      !trimmed.startsWith("[") &&
       trimmed.startsWith('"')
     ) {
       // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          location: "index.ts:normalizeToolArguments:attemptWrap",
-          message: "Attempting to wrap string in braces",
-          data: {
-            trimmed: trimmed.substring(0, 200),
-            matchesPattern: !!trimmed.match(/^"[^"]+":/),
-            wrapped: `{${trimmed}}`.substring(0, 200),
-          },
-          timestamp: Date.now(),
-          sessionId: "debug-session",
-          runId: "run1",
-          hypothesisId: "B",
-        }),
-      }).catch(() => {});
+      fetch(
+        "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "index.ts:normalizeToolArguments:attemptWrap",
+            message: "Attempting to wrap string in braces",
+            data: {
+              trimmed: trimmed.substring(0, 200),
+              matchesPattern: !!trimmed.match(/^"[^"]+":/),
+              wrapped: `{${trimmed}}`.substring(0, 200),
+            },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            runId: "run1",
+            hypothesisId: "B",
+          }),
+        },
+      ).catch(() => {});
       // #endregion
-      
+
       // Check if it matches the pattern "key": (with optional value)
       const keyPattern = /^"[^"]+":/;
       if (keyPattern.test(trimmed)) {
@@ -1149,42 +1234,51 @@ function normalizeToolArguments(value: unknown): unknown {
           const wrapped = `{${trimmed}}`;
           const parsed = JSON.parse(wrapped);
           // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              location: "index.ts:normalizeToolArguments:wrapSuccess",
-              message: "Successfully wrapped and parsed",
-              data: { parsedType: typeof parsed },
-              timestamp: Date.now(),
-              sessionId: "debug-session",
-              runId: "run1",
-              hypothesisId: "B",
-            }),
-          }).catch(() => {});
+          fetch(
+            "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                location: "index.ts:normalizeToolArguments:wrapSuccess",
+                message: "Successfully wrapped and parsed",
+                data: { parsedType: typeof parsed },
+                timestamp: Date.now(),
+                sessionId: "debug-session",
+                runId: "run1",
+                hypothesisId: "B",
+              }),
+            },
+          ).catch(() => {});
           // #endregion
           return parsed;
         } catch (wrapError) {
           // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              location: "index.ts:normalizeToolArguments:wrapFailed",
-              message: "Wrapping in braces failed",
-              data: { error: String(wrapError), wrapped: `{${trimmed}}`.substring(0, 200) },
-              timestamp: Date.now(),
-              sessionId: "debug-session",
-              runId: "run1",
-              hypothesisId: "B",
-            }),
-          }).catch(() => {});
+          fetch(
+            "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                location: "index.ts:normalizeToolArguments:wrapFailed",
+                message: "Wrapping in braces failed",
+                data: {
+                  error: String(wrapError),
+                  wrapped: `{${trimmed}}`.substring(0, 200),
+                },
+                timestamp: Date.now(),
+                sessionId: "debug-session",
+                runId: "run1",
+                hypothesisId: "B",
+              }),
+            },
+          ).catch(() => {});
           // #endregion
           // Fall through - return original value
         }
       }
     }
-    
+
     // If all parsing attempts fail, return the value as-is
     // JSON.stringify in sanitizeAttributesForStorage will properly escape it
     // #region agent log
@@ -1194,7 +1288,10 @@ function normalizeToolArguments(value: unknown): unknown {
       body: JSON.stringify({
         location: "index.ts:normalizeToolArguments:returnOriginal",
         message: "Returning original value (all fixes failed)",
-        data: { valuePreview: value.substring(0, 200), valueLength: value.length },
+        data: {
+          valuePreview: value.substring(0, 200),
+          valueLength: value.length,
+        },
         timestamp: Date.now(),
         sessionId: "debug-session",
         runId: "run1",
@@ -1217,9 +1314,9 @@ function normalizeMessageToolCalls(message: any): any {
       data: {
         hasMessage: !!message,
         messageType: typeof message,
-        hasAdditionalKwargs: !!(message?.additional_kwargs),
+        hasAdditionalKwargs: !!message?.additional_kwargs,
         hasToolCalls: Array.isArray(message?.tool_calls),
-        hasFunctionCall: !!(message?.function_call),
+        hasFunctionCall: !!message?.function_call,
       },
       timestamp: Date.now(),
       sessionId: "debug-session",
@@ -1228,7 +1325,7 @@ function normalizeMessageToolCalls(message: any): any {
     }),
   }).catch(() => {});
   // #endregion
-  
+
   if (!message || typeof message !== "object") return message;
 
   const normalized = { ...message };
@@ -1246,7 +1343,10 @@ function normalizeMessageToolCalls(message: any): any {
       kwargs.tool_calls = kwargs.tool_calls.map((call: any) => {
         if (!call || typeof call !== "object") return call;
         const normalizedCall = { ...call };
-        if (normalizedCall.function && typeof normalizedCall.function === "object") {
+        if (
+          normalizedCall.function &&
+          typeof normalizedCall.function === "object"
+        ) {
           const fn = { ...normalizedCall.function };
           if ("arguments" in fn) {
             fn.arguments = normalizeToolArguments(fn.arguments);
@@ -1263,26 +1363,35 @@ function normalizeMessageToolCalls(message: any): any {
     normalized.tool_calls = normalized.tool_calls.map((call: any) => {
       if (!call || typeof call !== "object") return call;
       const normalizedCall = { ...call };
-      if (normalizedCall.function && typeof normalizedCall.function === "object") {
+      if (
+        normalizedCall.function &&
+        typeof normalizedCall.function === "object"
+      ) {
         const fn = { ...normalizedCall.function };
         if ("arguments" in fn) {
           // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              location: "index.ts:normalizeMessageToolCalls:toolCallArgs",
-              message: "Normalizing tool_call function.arguments",
-              data: {
-                argsType: typeof fn.arguments,
-                argsPreview: typeof fn.arguments === "string" ? fn.arguments.substring(0, 200) : String(fn.arguments).substring(0, 200),
-              },
-              timestamp: Date.now(),
-              sessionId: "debug-session",
-              runId: "run1",
-              hypothesisId: "A,C",
-            }),
-          }).catch(() => {});
+          fetch(
+            "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                location: "index.ts:normalizeMessageToolCalls:toolCallArgs",
+                message: "Normalizing tool_call function.arguments",
+                data: {
+                  argsType: typeof fn.arguments,
+                  argsPreview:
+                    typeof fn.arguments === "string"
+                      ? fn.arguments.substring(0, 200)
+                      : String(fn.arguments).substring(0, 200),
+                },
+                timestamp: Date.now(),
+                sessionId: "debug-session",
+                runId: "run1",
+                hypothesisId: "A,C",
+              }),
+            },
+          ).catch(() => {});
           // #endregion
           fn.arguments = normalizeToolArguments(fn.arguments);
         }
@@ -1292,26 +1401,35 @@ function normalizeMessageToolCalls(message: any): any {
     });
   }
 
-  if (normalized.function_call && typeof normalized.function_call === "object") {
+  if (
+    normalized.function_call &&
+    typeof normalized.function_call === "object"
+  ) {
     const functionCall = { ...normalized.function_call };
     if ("arguments" in functionCall) {
       // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          location: "index.ts:normalizeMessageToolCalls:functionCallArgs",
-          message: "Normalizing function_call.arguments",
-          data: {
-            argsType: typeof functionCall.arguments,
-            argsPreview: typeof functionCall.arguments === "string" ? functionCall.arguments.substring(0, 200) : String(functionCall.arguments).substring(0, 200),
-          },
-          timestamp: Date.now(),
-          sessionId: "debug-session",
-          runId: "run1",
-          hypothesisId: "A,C",
-        }),
-      }).catch(() => {});
+      fetch(
+        "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "index.ts:normalizeMessageToolCalls:functionCallArgs",
+            message: "Normalizing function_call.arguments",
+            data: {
+              argsType: typeof functionCall.arguments,
+              argsPreview:
+                typeof functionCall.arguments === "string"
+                  ? functionCall.arguments.substring(0, 200)
+                  : String(functionCall.arguments).substring(0, 200),
+            },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            runId: "run1",
+            hypothesisId: "A,C",
+          }),
+        },
+      ).catch(() => {});
       // #endregion
       functionCall.arguments = normalizeToolArguments(functionCall.arguments);
     }
@@ -1370,6 +1488,10 @@ export class Observa {
   private spanStack: string[] = []; // Stack for tracking parent-child relationships
   private traceStartTime: number | null = null;
 
+  // PHASE 5: Langfuse parity - explicit trace-level I/O (updateTrace)
+  private traceLevelInput: string | null = null;
+  private traceLevelOutput: string | null = null;
+
   // Track traces with errors (for automatic trace_end generation when using instrumentation)
   private tracesWithErrors: Set<string> = new Set();
   // Track root span IDs for traces (for automatic trace_end generation)
@@ -1377,7 +1499,10 @@ export class Observa {
   // Track known span IDs per trace to validate feedback parentSpanId
   private traceSpanIds: Map<string, Set<string>> = new Map();
 
-  private registerSpanForTrace(traceId: string | null | undefined, spanId: string): void {
+  private registerSpanForTrace(
+    traceId: string | null | undefined,
+    spanId: string,
+  ): void {
     if (!traceId) return;
     const existing = this.traceSpanIds.get(traceId);
     if (existing) {
@@ -1415,7 +1540,7 @@ export class Observa {
         throw new Error(
           "Observa SDK: tenantId and projectId are required when using legacy API key format. " +
             "Either provide a JWT-formatted API key (which encodes tenant/project context) " +
-            "or explicitly provide tenantId and projectId in the config."
+            "or explicitly provide tenantId and projectId in the config.",
         );
       }
       this.tenantId = config.tenantId;
@@ -1427,7 +1552,7 @@ export class Observa {
     if (!this.tenantId || !this.projectId) {
       throw new Error(
         "Observa SDK: tenantId and projectId must be set. " +
-          "This should never happen - please report this error."
+          "This should never happen - please report this error.",
       );
     }
 
@@ -1442,7 +1567,7 @@ export class Observa {
     console.log(
       `💧 Observa SDK Initialized (${
         this.isProduction ? "production" : "development"
-      })`
+      })`,
     );
 
     // Debug logging
@@ -1453,7 +1578,7 @@ export class Observa {
       console.log(
         `🔗 [Observa] Auth: ${
           jwtContext ? "JWT (auto-extracted)" : "Legacy (config)"
-        }`
+        }`,
       );
     }
 
@@ -1516,7 +1641,7 @@ export class Observa {
     eventData: Partial<CanonicalEvent> & {
       event_type: EventType;
       attributes: any;
-    }
+    },
   ): void {
     const baseProps = this.createBaseEventProperties();
     const parentSpanId =
@@ -1544,7 +1669,8 @@ export class Observa {
       ...baseProps,
       trace_id: (eventData as any).trace_id ?? baseProps.trace_id,
       span_id: spanId,
-      parent_span_id: resolvedParentSpanId === spanId ? null : resolvedParentSpanId,
+      parent_span_id:
+        resolvedParentSpanId === spanId ? null : resolvedParentSpanId,
       timestamp: eventData.timestamp || new Date().toISOString(),
       event_type: eventData.event_type,
       conversation_id: eventData.conversation_id ?? null,
@@ -1556,63 +1682,73 @@ export class Observa {
       attributes: (() => {
         // #region agent log
         const attrsStr = JSON.stringify(eventData.attributes);
-        fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "index.ts:addEvent:beforeSanitize",
-            message: "Attributes before sanitizeAttributesForStorage",
-            data: {
-              attributesPreview: attrsStr.substring(0, 500),
-              attributesLength: attrsStr.length,
-              hasInputMessages: !!(eventData.attributes?.llm_call?.input_messages),
-            },
-            timestamp: Date.now(),
-            sessionId: "debug-session",
-            runId: "run1",
-            hypothesisId: "C,D,E",
-          }),
-        }).catch(() => {});
-        // #endregion
-        const sanitized = sanitizeAttributesForStorage(
-          eventData.attributes,
-          undefined,
-          this.maxResponseChars
-        );
-        // #region agent log
-        try {
-          const sanitizedStr = JSON.stringify(sanitized);
-          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+        fetch(
+          "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+          {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              location: "index.ts:addEvent:afterSanitize",
-              message: "Attributes after sanitizeAttributesForStorage",
+              location: "index.ts:addEvent:beforeSanitize",
+              message: "Attributes before sanitizeAttributesForStorage",
               data: {
-                sanitizedPreview: sanitizedStr.substring(0, 500),
-                sanitizedLength: sanitizedStr.length,
-                isValidJSON: true,
+                attributesPreview: attrsStr.substring(0, 500),
+                attributesLength: attrsStr.length,
+                hasInputMessages:
+                  !!eventData.attributes?.llm_call?.input_messages,
               },
               timestamp: Date.now(),
               sessionId: "debug-session",
               runId: "run1",
               hypothesisId: "C,D,E",
             }),
-          }).catch(() => {});
+          },
+        ).catch(() => {});
+        // #endregion
+        const sanitized = sanitizeAttributesForStorage(
+          eventData.attributes,
+          undefined,
+          this.maxResponseChars,
+        );
+        // #region agent log
+        try {
+          const sanitizedStr = JSON.stringify(sanitized);
+          fetch(
+            "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                location: "index.ts:addEvent:afterSanitize",
+                message: "Attributes after sanitizeAttributesForStorage",
+                data: {
+                  sanitizedPreview: sanitizedStr.substring(0, 500),
+                  sanitizedLength: sanitizedStr.length,
+                  isValidJSON: true,
+                },
+                timestamp: Date.now(),
+                sessionId: "debug-session",
+                runId: "run1",
+                hypothesisId: "C,D,E",
+              }),
+            },
+          ).catch(() => {});
         } catch (e) {
-          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              location: "index.ts:addEvent:afterSanitize",
-              message: "ERROR: sanitized attributes are invalid JSON",
-              data: { error: String(e) },
-              timestamp: Date.now(),
-              sessionId: "debug-session",
-              runId: "run1",
-              hypothesisId: "E",
-            }),
-          }).catch(() => {});
+          fetch(
+            "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                location: "index.ts:addEvent:afterSanitize",
+                message: "ERROR: sanitized attributes are invalid JSON",
+                data: { error: String(e) },
+                timestamp: Date.now(),
+                sessionId: "debug-session",
+                runId: "run1",
+                hypothesisId: "E",
+              }),
+            },
+          ).catch(() => {});
         }
         // #endregion
         return sanitized;
@@ -1647,7 +1783,7 @@ export class Observa {
             runId: "run1",
             hypothesisId: "E",
           }),
-        }
+        },
       ).catch(() => {});
       // #endregion
     }
@@ -1677,7 +1813,7 @@ export class Observa {
       numPrompts?: number;
       attributes?: Record<string, any>;
       attributes_json?: string;
-    } = {}
+    } = {},
   ): string {
     // End previous trace if active
     if (this.currentTraceId) {
@@ -1689,6 +1825,8 @@ export class Observa {
     this.rootSpanId = crypto.randomUUID();
     this.spanStack = [this.rootSpanId];
     this.traceStartTime = Date.now();
+    this.traceLevelInput = null;
+    this.traceLevelOutput = null;
     // #region agent log
     fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
       method: "POST",
@@ -1733,7 +1871,7 @@ export class Observa {
       } catch (error) {
         console.warn(
           "[Observa] Failed to parse attributes_json in startTrace, using individual parameters:",
-          error
+          error,
         );
         // Fall through to use individual parameters
       }
@@ -1807,7 +1945,7 @@ export class Observa {
       } catch (error) {
         console.warn(
           "[Observa] Failed to parse attributes_json in trackTraceStart:",
-          error
+          error,
         );
       }
     }
@@ -1840,7 +1978,7 @@ export class Observa {
       event_type: "trace_start",
       span_id: payload.spanId,
       parent_span_id: payload.parentSpanId,
-      trace_id: payload.traceId || this.currentTraceId || null,
+      trace_id: payload.traceId || this.currentTraceId || crypto.randomUUID(),
       attributes: {
         trace_start: traceStartAttributes,
       },
@@ -1871,7 +2009,7 @@ export class Observa {
       } catch (error) {
         console.warn(
           "[Observa] Failed to parse attributes_json in sendEvent:",
-          error
+          error,
         );
       }
     }
@@ -1880,7 +2018,7 @@ export class Observa {
       event_type: event.event_type as any,
       span_id: event.span_id,
       parent_span_id: event.parent_span_id,
-      trace_id: event.trace_id || this.currentTraceId || null,
+      trace_id: event.trace_id || this.currentTraceId || crypto.randomUUID(),
       timestamp: event.timestamp || new Date().toISOString(),
       attributes,
     });
@@ -1916,6 +2054,15 @@ export class Observa {
    */
   getCurrentTraceId(): string | null {
     return this.currentTraceId;
+  }
+
+  /**
+   * PHASE 5: Langfuse parity - Set trace-level input/output explicitly.
+   * Values are included in trace_end on endTrace and used by the API for summary.query/response.
+   */
+  updateTrace(input?: string | null, output?: string | null): void {
+    if (input !== undefined) this.traceLevelInput = input;
+    if (output !== undefined) this.traceLevelOutput = output;
   }
 
   /**
@@ -1985,6 +2132,20 @@ export class Observa {
     metadata?: Record<string, any> | null;
     toolDefinitions?: Array<Record<string, any>> | null;
     tools?: Array<Record<string, any>> | null;
+    // PHASE 5: Langfuse parity - when true, omit output (caller uses trackOutput for final answer)
+    isFinalOutput?: boolean;
+    // PHASE 5: Langfuse parity - observation type (span, generation, tool, agent, chain, etc.)
+    observationType?:
+      | "span"
+      | "generation"
+      | "tool"
+      | "agent"
+      | "chain"
+      | "retriever"
+      | "embedding"
+      | "evaluator"
+      | "guardrail"
+      | null;
   }): string {
     const spanId = crypto.randomUUID();
     // #region agent log
@@ -2043,10 +2204,14 @@ export class Observa {
 
     // Normalize tool call arguments so we avoid double-encoded JSON strings
     const normalizedInputMessages = options.inputMessages
-      ? options.inputMessages.map((message) => normalizeMessageToolCalls(message))
+      ? options.inputMessages.map((message) =>
+          normalizeMessageToolCalls(message),
+        )
       : null;
     const normalizedOutputMessages = options.outputMessages
-      ? options.outputMessages.map((message) => normalizeMessageToolCalls(message))
+      ? options.outputMessages.map((message) =>
+          normalizeMessageToolCalls(message),
+        )
       : null;
     const safeInputMessages = normalizedInputMessages
       ? toPlainJson(normalizedInputMessages, this.maxResponseChars)
@@ -2068,6 +2233,10 @@ export class Observa {
       ? toPlainJson(options.metadata, this.maxResponseChars)
       : null;
 
+    // PHASE 5: When isFinalOutput=true, omit output (caller uses trackOutput for final answer)
+    const llmOutput =
+      options.isFinalOutput === true ? null : (options.output ?? null);
+
     this.addEvent({
       ...(options.traceId ? { trace_id: options.traceId } : {}),
       event_type: "llm_call",
@@ -2076,7 +2245,7 @@ export class Observa {
         llm_call: {
           model: options.model,
           input: options.input || null,
-          output: options.output || null,
+          output: llmOutput,
           input_tokens: options.inputTokens || null,
           output_tokens: options.outputTokens || null,
           total_tokens: options.totalTokens || null,
@@ -2120,6 +2289,10 @@ export class Observa {
         },
         // Add metadata at top level of attributes (matching Langfuse format)
         ...(safeMetadata ? { metadata: safeMetadata } : {}),
+        // PHASE 5: Langfuse parity - observation type for UI categorization
+        ...(options.observationType
+          ? { observation_type: options.observationType }
+          : {}),
       },
     });
 
@@ -2150,6 +2323,18 @@ export class Observa {
     toolCallId?: string | null;
     errorType?: string | null;
     errorCategory?: string | null;
+    // PHASE 5: Langfuse parity - observation type
+    observationType?:
+      | "span"
+      | "generation"
+      | "tool"
+      | "agent"
+      | "chain"
+      | "retriever"
+      | "embedding"
+      | "evaluator"
+      | "guardrail"
+      | null;
   }): string {
     const spanId = crypto.randomUUID();
 
@@ -2196,6 +2381,9 @@ export class Observa {
           error_type: options.errorType || null,
           error_category: options.errorCategory || null,
         },
+        ...(options.observationType
+          ? { observation_type: options.observationType }
+          : {}),
       },
     });
 
@@ -2358,7 +2546,7 @@ export class Observa {
           {
             traceId: options.traceId,
             parentSpanId,
-          }
+          },
         );
         parentSpanId = null;
       }
@@ -2662,7 +2850,7 @@ export class Observa {
   async endTrace(
     options: {
       outcome?: "success" | "error" | "timeout";
-    } = {}
+    } = {},
   ): Promise<string> {
     if (!this.currentTraceId || !this.rootSpanId) {
       throw new Error("[Observa] No active trace. Call startTrace() first.");
@@ -2670,23 +2858,23 @@ export class Observa {
 
     // Calculate summary statistics from buffered events for this trace
     const traceEvents = this.eventBuffer.filter(
-      (e) => e.trace_id === this.currentTraceId
+      (e) => e.trace_id === this.currentTraceId,
     );
     const llmEvents = traceEvents.filter((e) => e.event_type === "llm_call");
     const totalTokens = llmEvents.reduce(
       (sum, e) => sum + (e.attributes.llm_call?.total_tokens || 0),
-      0
+      0,
     );
     const totalCost = llmEvents.reduce(
       (sum, e) => sum + (e.attributes.llm_call?.cost || 0),
-      0
+      0,
     );
 
     // Calculate total latency
     const totalLatency =
       this.traceStartTime !== null ? Date.now() - this.traceStartTime : null;
 
-    // Add trace_end event
+    // Add trace_end event (PHASE 5: include trace_level_input/output when set via updateTrace)
     this.addEvent({
       event_type: "trace_end",
       span_id: this.rootSpanId,
@@ -2697,13 +2885,15 @@ export class Observa {
           total_tokens: totalTokens || null,
           total_cost: totalCost || null,
           outcome: options.outcome || "success",
+          trace_level_input: this.traceLevelInput,
+          trace_level_output: this.traceLevelOutput,
         },
       },
     });
 
     // Get all events for this trace
     const traceEventsToSend = this.eventBuffer.filter(
-      (e) => e.trace_id === this.currentTraceId
+      (e) => e.trace_id === this.currentTraceId,
     );
     // #region agent log
     const traceEventTypeCounts: Record<string, number> = {};
@@ -2735,7 +2925,7 @@ export class Observa {
       await this._sendEventsWithRetry(traceEventsToSend);
       // Remove sent events from buffer
       this.eventBuffer = this.eventBuffer.filter(
-        (e) => e.trace_id !== this.currentTraceId
+        (e) => e.trace_id !== this.currentTraceId,
       );
     }
 
@@ -2831,11 +3021,11 @@ export class Observa {
         const llmEvents = events.filter((e) => e.event_type === "llm_call");
         const totalTokens = llmEvents.reduce(
           (sum, e) => sum + (e.attributes.llm_call?.total_tokens || 0),
-          0
+          0,
         );
         const totalCost = llmEvents.reduce(
           (sum, e) => sum + (e.attributes.llm_call?.cost || 0),
-          0
+          0,
         );
 
         // Calculate total latency from first to last event
@@ -2881,7 +3071,7 @@ export class Observa {
    */
   private async _sendEventsWithRetry(
     events: CanonicalEvent[],
-    maxRetries: number = 3
+    maxRetries: number = 3,
   ): Promise<void> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
@@ -2894,7 +3084,7 @@ export class Observa {
             `[Observa] Failed to send events after ${
               maxRetries + 1
             } attempts, re-buffering:`,
-            error
+            error,
           );
           this.eventBuffer.push(...events);
           // Prevent buffer from growing too large
@@ -2951,7 +3141,7 @@ export class Observa {
       userId?: string;
       sessionId?: string;
       redact?: (data: any) => any;
-    }
+    },
   ): any {
     try {
       // Use static import - tsup bundles everything together
@@ -2989,7 +3179,7 @@ export class Observa {
       userId?: string;
       sessionId?: string;
       redact?: (data: any) => any;
-    }
+    },
   ): any {
     try {
       // Use static import - tsup bundles everything together
@@ -3015,15 +3205,13 @@ export class Observa {
    * const handler = observa.observeLangChain({ name: 'my-app' });
    * ```
    */
-  observeLangChain(
-    options?: {
-      name?: string;
-      tags?: string[];
-      userId?: string;
-      sessionId?: string;
-      redact?: (data: any) => any;
-    }
-  ): any {
+  observeLangChain(options?: {
+    name?: string;
+    tags?: string[];
+    userId?: string;
+    sessionId?: string;
+    redact?: (data: any) => any;
+  }): any {
     try {
       return observeLangChainFn(this, { ...options, observa: this });
     } catch (error) {
@@ -3084,7 +3272,7 @@ export class Observa {
       userId?: string;
       sessionId?: string;
       redact?: (data: any) => any;
-    }
+    },
   ): any {
     try {
       // Use static import - tsup bundles everything together
@@ -3170,7 +3358,7 @@ export class Observa {
             runId: "run1",
             hypothesisId: "A",
           }),
-        }
+        },
       ).catch(() => {});
     } catch {
       // ignore debug logging errors
@@ -3259,7 +3447,7 @@ export class Observa {
           events[0]?.tenant_id
         }, Project: ${events[0]?.project_id}, APIKey: ${
           this.apiKey ? `Yes(${this.apiKey.length} chars)` : "No"
-        }`
+        }`,
       );
 
       // Add timeout to prevent hanging requests (10 seconds)
@@ -3270,50 +3458,66 @@ export class Observa {
         // #region agent log
         // Check for problematic arguments in events before serialization
         for (const evt of events) {
-          if (evt.event_type === 'llm_call') {
-            const inputMessages = (evt.attributes as any)?.llm_call?.input_messages;
-            const outputMessages = (evt.attributes as any)?.llm_call?.output_messages;
+          if (evt.event_type === "llm_call") {
+            const inputMessages = (evt.attributes as any)?.llm_call
+              ?.input_messages;
+            const outputMessages = (evt.attributes as any)?.llm_call
+              ?.output_messages;
             if (Array.isArray(inputMessages)) {
               for (const msg of inputMessages) {
                 if (msg?.additional_kwargs?.function_call?.arguments) {
                   const args = msg.additional_kwargs.function_call.arguments;
-                  fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      location: "index.ts:sendEvents:preSerialize",
-                      message: "Found function_call.arguments in input_messages",
-                      data: {
-                        argsType: typeof args,
-                        argsPreview: typeof args === "string" ? args.substring(0, 200) : JSON.stringify(args).substring(0, 200),
-                      },
-                      timestamp: Date.now(),
-                      sessionId: "debug-session",
-                      runId: "run1",
-                      hypothesisId: "D,E",
-                    }),
-                  }).catch(() => {});
+                  fetch(
+                    "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        location: "index.ts:sendEvents:preSerialize",
+                        message:
+                          "Found function_call.arguments in input_messages",
+                        data: {
+                          argsType: typeof args,
+                          argsPreview:
+                            typeof args === "string"
+                              ? args.substring(0, 200)
+                              : JSON.stringify(args).substring(0, 200),
+                        },
+                        timestamp: Date.now(),
+                        sessionId: "debug-session",
+                        runId: "run1",
+                        hypothesisId: "D,E",
+                      }),
+                    },
+                  ).catch(() => {});
                 }
                 if (Array.isArray(msg?.additional_kwargs?.tool_calls)) {
                   for (const tc of msg.additional_kwargs.tool_calls) {
                     if (tc?.function?.arguments) {
                       const args = tc.function.arguments;
-                      fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          location: "index.ts:sendEvents:preSerialize",
-                          message: "Found tool_call function.arguments in input_messages",
-                          data: {
-                            argsType: typeof args,
-                            argsPreview: typeof args === "string" ? args.substring(0, 200) : JSON.stringify(args).substring(0, 200),
-                          },
-                          timestamp: Date.now(),
-                          sessionId: "debug-session",
-                          runId: "run1",
-                          hypothesisId: "D,E",
-                        }),
-                      }).catch(() => {});
+                      fetch(
+                        "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                        {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            location: "index.ts:sendEvents:preSerialize",
+                            message:
+                              "Found tool_call function.arguments in input_messages",
+                            data: {
+                              argsType: typeof args,
+                              argsPreview:
+                                typeof args === "string"
+                                  ? args.substring(0, 200)
+                                  : JSON.stringify(args).substring(0, 200),
+                            },
+                            timestamp: Date.now(),
+                            sessionId: "debug-session",
+                            runId: "run1",
+                            hypothesisId: "D,E",
+                          }),
+                        },
+                      ).catch(() => {});
                     }
                   }
                 }
@@ -3323,43 +3527,57 @@ export class Observa {
               for (const msg of outputMessages) {
                 if (msg?.additional_kwargs?.function_call?.arguments) {
                   const args = msg.additional_kwargs.function_call.arguments;
-                  fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      location: "index.ts:sendEvents:preSerialize",
-                      message: "Found function_call.arguments in output_messages",
-                      data: {
-                        argsType: typeof args,
-                        argsPreview: typeof args === "string" ? args.substring(0, 200) : JSON.stringify(args).substring(0, 200),
-                      },
-                      timestamp: Date.now(),
-                      sessionId: "debug-session",
-                      runId: "run1",
-                      hypothesisId: "D,E",
-                    }),
-                  }).catch(() => {});
+                  fetch(
+                    "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        location: "index.ts:sendEvents:preSerialize",
+                        message:
+                          "Found function_call.arguments in output_messages",
+                        data: {
+                          argsType: typeof args,
+                          argsPreview:
+                            typeof args === "string"
+                              ? args.substring(0, 200)
+                              : JSON.stringify(args).substring(0, 200),
+                        },
+                        timestamp: Date.now(),
+                        sessionId: "debug-session",
+                        runId: "run1",
+                        hypothesisId: "D,E",
+                      }),
+                    },
+                  ).catch(() => {});
                 }
                 if (Array.isArray(msg?.additional_kwargs?.tool_calls)) {
                   for (const tc of msg.additional_kwargs.tool_calls) {
                     if (tc?.function?.arguments) {
                       const args = tc.function.arguments;
-                      fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          location: "index.ts:sendEvents:preSerialize",
-                          message: "Found tool_call function.arguments in output_messages",
-                          data: {
-                            argsType: typeof args,
-                            argsPreview: typeof args === "string" ? args.substring(0, 200) : JSON.stringify(args).substring(0, 200),
-                          },
-                          timestamp: Date.now(),
-                          sessionId: "debug-session",
-                          runId: "run1",
-                          hypothesisId: "D,E",
-                        }),
-                      }).catch(() => {});
+                      fetch(
+                        "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                        {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            location: "index.ts:sendEvents:preSerialize",
+                            message:
+                              "Found tool_call function.arguments in output_messages",
+                            data: {
+                              argsType: typeof args,
+                              argsPreview:
+                                typeof args === "string"
+                                  ? args.substring(0, 200)
+                                  : JSON.stringify(args).substring(0, 200),
+                            },
+                            timestamp: Date.now(),
+                            sessionId: "debug-session",
+                            runId: "run1",
+                            hypothesisId: "D,E",
+                          }),
+                        },
+                      ).catch(() => {});
                     }
                   }
                 }
@@ -3368,99 +3586,117 @@ export class Observa {
           }
         }
         // #endregion
-        
+
         // Final pass: recursively fix any remaining malformed argument strings
         // This catches any cases that might have bypassed earlier normalization
         const fixMalformedArguments = (obj: any): any => {
           if (obj === null || obj === undefined) return obj;
-          if (typeof obj === 'string') {
+          if (typeof obj === "string") {
             // Check if this string looks like malformed JSON arguments
             const trimmed = obj.trim();
             if (
               trimmed.startsWith('"') &&
               !trimmed.startsWith('"{') &&
-              trimmed.includes(':') &&
+              trimmed.includes(":") &&
               trimmed.length > 3
             ) {
               // #region agent log
-              fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  location: "index.ts:fixMalformedArguments:stringFound",
-                  message: "Found potential malformed string in final pass",
-                  data: {
-                    stringValue: trimmed.substring(0, 200),
-                    stringLength: trimmed.length,
-                  },
-                  timestamp: Date.now(),
-                  sessionId: "debug-session",
-                  runId: "run1",
-                  hypothesisId: "F",
-                }),
-              }).catch(() => {});
-              // #endregion
-              
-              try {
-                const normalized = normalizeToolArguments(obj);
-                if (typeof normalized !== 'string') {
-                  // #region agent log
-                  fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      location: "index.ts:fixMalformedArguments:fixed",
-                      message: "Successfully fixed malformed string in final pass",
-                      data: {
-                        original: trimmed.substring(0, 100),
-                        normalized: JSON.stringify(normalized).substring(0, 100),
-                      },
-                      timestamp: Date.now(),
-                      sessionId: "debug-session",
-                      runId: "run1",
-                      hypothesisId: "F",
-                    }),
-                  }).catch(() => {});
-                  // #endregion
-                  return normalized;
-                } else {
-                  // #region agent log
-                  fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      location: "index.ts:fixMalformedArguments:stillString",
-                      message: "WARNING: Normalization returned string - this may cause error",
-                      data: {
-                        stringValue: trimmed.substring(0, 200),
-                        normalizedValue: normalized.substring(0, 200),
-                      },
-                      timestamp: Date.now(),
-                      sessionId: "debug-session",
-                      runId: "run1",
-                      hypothesisId: "F",
-                    }),
-                  }).catch(() => {});
-                  // #endregion
-                }
-              } catch (e) {
-                // #region agent log
-                fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+              fetch(
+                "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
-                    location: "index.ts:fixMalformedArguments:normalizeFailed",
-                    message: "ERROR: Normalization failed in final pass",
+                    location: "index.ts:fixMalformedArguments:stringFound",
+                    message: "Found potential malformed string in final pass",
                     data: {
-                      error: String(e),
                       stringValue: trimmed.substring(0, 200),
+                      stringLength: trimmed.length,
                     },
                     timestamp: Date.now(),
                     sessionId: "debug-session",
                     runId: "run1",
                     hypothesisId: "F",
                   }),
-                }).catch(() => {});
+                },
+              ).catch(() => {});
+              // #endregion
+
+              try {
+                const normalized = normalizeToolArguments(obj);
+                if (typeof normalized !== "string") {
+                  // #region agent log
+                  fetch(
+                    "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        location: "index.ts:fixMalformedArguments:fixed",
+                        message:
+                          "Successfully fixed malformed string in final pass",
+                        data: {
+                          original: trimmed.substring(0, 100),
+                          normalized: JSON.stringify(normalized).substring(
+                            0,
+                            100,
+                          ),
+                        },
+                        timestamp: Date.now(),
+                        sessionId: "debug-session",
+                        runId: "run1",
+                        hypothesisId: "F",
+                      }),
+                    },
+                  ).catch(() => {});
+                  // #endregion
+                  return normalized;
+                } else {
+                  // #region agent log
+                  fetch(
+                    "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        location: "index.ts:fixMalformedArguments:stillString",
+                        message:
+                          "WARNING: Normalization returned string - this may cause error",
+                        data: {
+                          stringValue: trimmed.substring(0, 200),
+                          normalizedValue: normalized.substring(0, 200),
+                        },
+                        timestamp: Date.now(),
+                        sessionId: "debug-session",
+                        runId: "run1",
+                        hypothesisId: "F",
+                      }),
+                    },
+                  ).catch(() => {});
+                  // #endregion
+                }
+              } catch (e) {
+                // #region agent log
+                fetch(
+                  "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      location:
+                        "index.ts:fixMalformedArguments:normalizeFailed",
+                      message: "ERROR: Normalization failed in final pass",
+                      data: {
+                        error: String(e),
+                        stringValue: trimmed.substring(0, 200),
+                      },
+                      timestamp: Date.now(),
+                      sessionId: "debug-session",
+                      runId: "run1",
+                      hypothesisId: "F",
+                    }),
+                  },
+                ).catch(() => {});
                 // #endregion
               }
             }
@@ -3469,22 +3705,36 @@ export class Observa {
           if (Array.isArray(obj)) {
             return obj.map(fixMalformedArguments);
           }
-          if (typeof obj === 'object') {
+          if (typeof obj === "object") {
             const fixed: Record<string, any> = {};
             for (const [key, val] of Object.entries(obj)) {
               // Special handling for arguments fields
-              if (key === 'arguments' && typeof val === 'string') {
+              if (key === "arguments" && typeof val === "string") {
                 fixed[key] = fixMalformedArguments(val);
-              } else if (key === 'function_call' && val && typeof val === 'object') {
+              } else if (
+                key === "function_call" &&
+                val &&
+                typeof val === "object"
+              ) {
                 const fixedVal = { ...val } as Record<string, any>;
-                if ('arguments' in fixedVal && typeof fixedVal.arguments === 'string') {
-                  fixedVal.arguments = fixMalformedArguments(fixedVal.arguments);
+                if (
+                  "arguments" in fixedVal &&
+                  typeof fixedVal.arguments === "string"
+                ) {
+                  fixedVal.arguments = fixMalformedArguments(
+                    fixedVal.arguments,
+                  );
                 }
                 fixed[key] = fixMalformedArguments(fixedVal);
-              } else if (key === 'function' && val && typeof val === 'object') {
+              } else if (key === "function" && val && typeof val === "object") {
                 const fixedVal = { ...val } as Record<string, any>;
-                if ('arguments' in fixedVal && typeof fixedVal.arguments === 'string') {
-                  fixedVal.arguments = fixMalformedArguments(fixedVal.arguments);
+                if (
+                  "arguments" in fixedVal &&
+                  typeof fixedVal.arguments === "string"
+                ) {
+                  fixedVal.arguments = fixMalformedArguments(
+                    fixedVal.arguments,
+                  );
                 }
                 fixed[key] = fixMalformedArguments(fixedVal);
               } else {
@@ -3495,9 +3745,9 @@ export class Observa {
           }
           return obj;
         };
-        
+
         const fixedEvents = events.map(fixMalformedArguments);
-        
+
         const payload = safeJsonStringify(fixedEvents, {
           maxStringLength: this.maxResponseChars,
         });
@@ -3506,121 +3756,151 @@ export class Observa {
         // Validate the payload is valid JSON and check for problematic patterns
         try {
           const parsed = JSON.parse(payload); // Validate it's parseable
-          
+
           // Deep check: recursively search for any arguments fields that are strings
-          const checkForStringArguments = (obj: any, path: string = ''): void => {
+          const checkForStringArguments = (
+            obj: any,
+            path: string = "",
+          ): void => {
             if (obj === null || obj === undefined) return;
-            if (typeof obj === 'string') {
+            if (typeof obj === "string") {
               const trimmed = obj.trim();
               if (
                 trimmed.startsWith('"') &&
                 !trimmed.startsWith('"{') &&
-                trimmed.includes(':') &&
+                trimmed.includes(":") &&
                 trimmed.length > 3
               ) {
-                fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    location: "index.ts:sendEvents:deepCheckFound",
-                    message: "CRITICAL: Found malformed string in parsed payload",
-                    data: {
-                      path,
-                      stringValue: trimmed.substring(0, 200),
-                      stringLength: trimmed.length,
-                    },
-                    timestamp: Date.now(),
-                    sessionId: "debug-session",
-                    runId: "run1",
-                    hypothesisId: "E",
-                  }),
-                }).catch(() => {});
-              }
-              return;
-            }
-            if (Array.isArray(obj)) {
-              obj.forEach((item, idx) => checkForStringArguments(item, `${path}[${idx}]`));
-              return;
-            }
-            if (typeof obj === 'object') {
-              for (const [key, val] of Object.entries(obj)) {
-                const newPath = path ? `${path}.${key}` : key;
-                if (key === 'arguments' && typeof val === 'string') {
-                  fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+                fetch(
+                  "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                  {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                      location: "index.ts:sendEvents:deepCheckArguments",
-                      message: "CRITICAL: Found string arguments field in parsed payload",
+                      location: "index.ts:sendEvents:deepCheckFound",
+                      message:
+                        "CRITICAL: Found malformed string in parsed payload",
                       data: {
-                        path: newPath,
-                        stringValue: (val as string).substring(0, 200),
-                        stringLength: (val as string).length,
+                        path,
+                        stringValue: trimmed.substring(0, 200),
+                        stringLength: trimmed.length,
                       },
                       timestamp: Date.now(),
                       sessionId: "debug-session",
                       runId: "run1",
                       hypothesisId: "E",
                     }),
-                  }).catch(() => {});
+                  },
+                ).catch(() => {});
+              }
+              return;
+            }
+            if (Array.isArray(obj)) {
+              obj.forEach((item, idx) =>
+                checkForStringArguments(item, `${path}[${idx}]`),
+              );
+              return;
+            }
+            if (typeof obj === "object") {
+              for (const [key, val] of Object.entries(obj)) {
+                const newPath = path ? `${path}.${key}` : key;
+                if (key === "arguments" && typeof val === "string") {
+                  fetch(
+                    "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        location: "index.ts:sendEvents:deepCheckArguments",
+                        message:
+                          "CRITICAL: Found string arguments field in parsed payload",
+                        data: {
+                          path: newPath,
+                          stringValue: (val as string).substring(0, 200),
+                          stringLength: (val as string).length,
+                        },
+                        timestamp: Date.now(),
+                        sessionId: "debug-session",
+                        runId: "run1",
+                        hypothesisId: "E",
+                      }),
+                    },
+                  ).catch(() => {});
                 }
                 checkForStringArguments(val, newPath);
               }
             }
           };
           checkForStringArguments(parsed);
-          
+
           // Check for the problematic pattern in the serialized string
           const problematicPattern = /"arguments":""[^"]+":/;
           if (problematicPattern.test(payload)) {
             const match = payload.match(problematicPattern);
             const contextStart = Math.max(0, (match?.index || 0) - 100);
-            const contextEnd = Math.min(payload.length, (match?.index || 0) + 300);
-            fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
+            const contextEnd = Math.min(
+              payload.length,
+              (match?.index || 0) + 300,
+            );
+            fetch(
+              "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  location: "index.ts:sendEvents:postSerialize",
+                  message:
+                    "ERROR: Found problematic arguments pattern in serialized payload",
+                  data: {
+                    context: payload.substring(contextStart, contextEnd),
+                    payloadLength: payload.length,
+                  },
+                  timestamp: Date.now(),
+                  sessionId: "debug-session",
+                  runId: "run1",
+                  hypothesisId: "E",
+                }),
+              },
+            ).catch(() => {});
+          } else {
+            fetch(
+              "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  location: "index.ts:sendEvents:postSerialize",
+                  message:
+                    "Payload serialized successfully, no problematic pattern found",
+                  data: { payloadLength: payload.length },
+                  timestamp: Date.now(),
+                  sessionId: "debug-session",
+                  runId: "run1",
+                  hypothesisId: "E",
+                }),
+              },
+            ).catch(() => {});
+          }
+        } catch (e) {
+          fetch(
+            "http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2",
+            {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 location: "index.ts:sendEvents:postSerialize",
-                message: "ERROR: Found problematic arguments pattern in serialized payload",
+                message: "ERROR: Payload is not valid JSON",
                 data: {
-                  context: payload.substring(contextStart, contextEnd),
-                  payloadLength: payload.length,
+                  error: String(e),
+                  payloadPreview: payload.substring(0, 500),
                 },
                 timestamp: Date.now(),
                 sessionId: "debug-session",
                 runId: "run1",
                 hypothesisId: "E",
               }),
-            }).catch(() => {});
-          } else {
-            fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                location: "index.ts:sendEvents:postSerialize",
-                message: "Payload serialized successfully, no problematic pattern found",
-                data: { payloadLength: payload.length },
-                timestamp: Date.now(),
-                sessionId: "debug-session",
-                runId: "run1",
-                hypothesisId: "E",
-              }),
-            }).catch(() => {});
-          }
-        } catch (e) {
-          fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              location: "index.ts:sendEvents:postSerialize",
-              message: "ERROR: Payload is not valid JSON",
-              data: { error: String(e), payloadPreview: payload.substring(0, 500) },
-              timestamp: Date.now(),
-              sessionId: "debug-session",
-              runId: "run1",
-              hypothesisId: "E",
-            }),
-          }).catch(() => {});
+            },
+          ).catch(() => {});
         }
         // #endregion
 
@@ -3655,13 +3935,13 @@ export class Observa {
               runId: "run1",
               hypothesisId: "G",
             }),
-          }
+          },
         ).catch(() => {});
         // #endregion
 
         // Always log response status for debugging
         console.log(
-          `[Observa] Response status: ${response.status} ${response.statusText}`
+          `[Observa] Response status: ${response.status} ${response.statusText}`,
         );
 
         if (!response.ok) {
@@ -3695,18 +3975,18 @@ export class Observa {
                 runId: "run1",
                 hypothesisId: "G",
               }),
-            }
+            },
           ).catch(() => {});
           // #endregion
 
           console.error(
             `[Observa] Backend API error: ${response.status} ${response.statusText}`,
-            errorJson.error || errorText
+            errorJson.error || errorText,
           );
           throw new Error(
             `Observa API error: ${response.status} ${
               errorJson.error?.message || errorText
-            }`
+            }`,
           );
         } else {
           const result = await response.json().catch(() => ({}));
@@ -3714,7 +3994,7 @@ export class Observa {
           console.log(
             `✅ [Observa] Events sent successfully - Trace ID: ${traceId}, Event count: ${
               result.event_count || events.length
-            }`
+            }`,
           );
         }
       } catch (fetchError) {
@@ -3732,7 +4012,7 @@ export class Observa {
         console.error("[Observa] Error name:", error.name);
         if (error.name === "AbortError") {
           console.error(
-            "[Observa] Request timed out - check network connectivity and API URL"
+            "[Observa] Request timed out - check network connectivity and API URL",
           );
         }
         if (error.stack) {

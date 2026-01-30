@@ -127,7 +127,9 @@ const agentSpanId = observa.trackLLMCall({
   input: "Find the parental leave policy",
   output: null,
   latencyMs: 20,
-  metadata: { "ai.agent.reasoning_summary": "Search policy docs and summarize" },
+  metadata: {
+    "ai.agent.reasoning_summary": "Search policy docs and summarize",
+  },
 });
 
 // Action + Action Input
@@ -270,6 +272,59 @@ const spanId = observa.trackAgentCreate({
   operationName: "create_agent", // Default
 });
 ```
+
+---
+
+### Langfuse Parity (Phase 5) — Trace vs. Observation
+
+**Trace-level I/O (`updateTrace`):**
+
+```typescript
+observa.startTrace({ name: "My trace" });
+// ... do work ...
+observa.updateTrace(
+  "User question: What is AI?",
+  "AI is artificial intelligence...",
+);
+await observa.endTrace();
+```
+
+Values are included in `trace_end` and used by the API for `summary.query` and `summary.response`.
+
+**`flush()`:** Sends buffered events without ending the trace. Use before process exit in serverless/short-lived apps.
+
+**`isFinalOutput` on `trackLLMCall`:** When true, omit output from the LLM span (caller uses `trackOutput` for the final answer). Prevents conflating intermediate tool-call steps with the final response.
+
+```typescript
+// Intermediate step (tool-call decision) — omit output
+observa.trackLLMCall({
+  model: "gpt-4",
+  input: "...",
+  output: null, // or use isFinalOutput: true
+  isFinalOutput: true,
+  latencyMs: 100,
+});
+observa.trackOutput({ final_output: "Final answer to user..." });
+```
+
+**`observationType`:** Optional Langfuse-style type for UI categorization. Use on `trackLLMCall` and `trackToolCall`:
+
+```typescript
+observa.trackLLMCall({
+  model: "gpt-4",
+  input: "...",
+  output: "...",
+  latencyMs: 100,
+  observationType: "generation",
+});
+observa.trackToolCall({
+  toolName: "search",
+  observationType: "tool",
+  /* ... */
+});
+```
+
+Valid values: `span`, `generation`, `tool`, `agent`, `chain`, `retriever`, `embedding`, `evaluator`, `guardrail`.
 
 ---
 
@@ -560,4 +615,3 @@ const agentId = observa.trackAgentCreate({
 The SDK now tracks and sends **ALL** OTEL parameters required for 95% SOTA coverage. Every parameter from the backend implementation is available in the SDK methods.
 
 **Critical:** Developers must use the new methods (`trackLLMCall()`, `trackEmbedding()`, etc.) to send complete OTEL data.
-
