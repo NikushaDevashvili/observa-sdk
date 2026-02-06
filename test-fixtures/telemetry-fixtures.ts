@@ -39,6 +39,46 @@ export const toolResponseFixture = {
   },
 };
 
+/** OpenAI Responses API fixture (non-streaming successful response) */
+export const openaiResponsesFixture = {
+  id: "resp_xxx",
+  object: "response",
+  status: "completed",
+  model: "gpt-4o",
+  output: [
+    {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "Hello!" }],
+    },
+  ],
+  output_text: "Hello!",
+  usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+};
+
+/** OpenAI Responses API fixture (failed response) */
+export const openaiResponsesFailedFixture = {
+  id: "resp_failed",
+  object: "response",
+  status: "failed",
+  error: {
+    code: "server_error",
+    message: "The model failed to generate a response.",
+  },
+  output: [],
+  usage: null,
+};
+
+/** OpenAI Responses API fixture (incomplete - max_tokens) */
+export const openaiResponsesIncompleteFixture = {
+  id: "resp_incomplete",
+  object: "response",
+  status: "incomplete",
+  incomplete_details: { reason: "max_tokens" },
+  output: [],
+  usage: { input_tokens: 100, output_tokens: 500, total_tokens: 600 },
+};
+
 export const agenticLoopFixture = {
   thoughtSummary: "Search the policy docs and summarize the result.",
   toolCall: {

@@ -29,7 +29,7 @@ export type NormalizedLLMCall = {
 };
 
 export function normalizeToolDefinitions(
-  rawTools: any
+  rawTools: any,
 ): Array<Record<string, any>> | null {
   if (!rawTools) return null;
 
@@ -43,10 +43,12 @@ export function normalizeToolDefinitions(
       name: String(key),
     }));
   } else if (typeof rawTools === "object") {
-    toolsArray = Object.entries(rawTools).map(([key, value]: [string, any]) => ({
-      tool: value,
-      name: key,
-    }));
+    toolsArray = Object.entries(rawTools).map(
+      ([key, value]: [string, any]) => ({
+        tool: value,
+        name: key,
+      }),
+    );
   }
 
   const normalized = toolsArray.map(({ tool, name: keyName }) => {
@@ -103,6 +105,15 @@ export function extractInputMessages(request: any): any[] | null {
     const normalized = normalizeMessages(request.messages);
     return normalized.length > 0 ? normalized : null;
   }
+  if (request.input !== undefined) {
+    if (typeof request.input === "string") {
+      return [{ role: "user", content: request.input }];
+    }
+    if (Array.isArray(request.input)) {
+      const normalized = normalizeMessages(request.input);
+      return normalized.length > 0 ? normalized : null;
+    }
+  }
   if (request.prompt) {
     const normalized = normalizePromptAsMessages(request.prompt);
     return normalized.length > 0 ? normalized : null;
@@ -112,6 +123,18 @@ export function extractInputMessages(request: any): any[] | null {
 
 export function extractOutputMessages(response: any): any[] | null {
   if (!response) return null;
+  if (response?.object === "response" && Array.isArray(response.output)) {
+    const items = response.output
+      .filter((i: any) => i?.type === "message")
+      .map((i: any) => ({
+        role: i.role || "assistant",
+        content:
+          i.content?.find((c: any) => c?.type === "output_text")?.text ?? "",
+        finish_reason: response.status,
+      }))
+      .filter((i: any) => i.content !== undefined);
+    return items.length > 0 ? items : null;
+  }
   if (response.choices && Array.isArray(response.choices)) {
     const normalized = response.choices
       .map((choice: any) => {
@@ -119,7 +142,8 @@ export function extractOutputMessages(response: any): any[] | null {
         if (!message) return null;
         return {
           ...message,
-          finish_reason: choice?.finish_reason ?? message?.finish_reason ?? null,
+          finish_reason:
+            choice?.finish_reason ?? message?.finish_reason ?? null,
         };
       })
       .filter(Boolean);
@@ -149,8 +173,7 @@ function normalizeUsageFromResponse(response: any): NormalizedUsage {
     usage.output_tokens ??
     usage.completionTokens ??
     null;
-  const computedTotal =
-    (inputTokens ?? 0) + (outputTokens ?? 0);
+  const computedTotal = (inputTokens ?? 0) + (outputTokens ?? 0);
   const totalTokens =
     usage.total_tokens ??
     usage.totalTokens ??
@@ -163,7 +186,16 @@ function normalizeUsageFromResponse(response: any): NormalizedUsage {
   };
 }
 
-function extractFinishReason(response: any, outputMessages: any[] | null): string | null {
+function extractFinishReason(
+  response: any,
+  outputMessages: any[] | null,
+): string | null {
+  if (response?.object === "response") {
+    if (response.status === "failed" && response.error) return "error";
+    if (response.status === "incomplete" && response.incomplete_details?.reason)
+      return response.incomplete_details.reason;
+    return response.status ?? null;
+  }
   if (response?.choices?.[0]?.finish_reason) {
     return response.choices[0].finish_reason;
   }
@@ -202,7 +234,7 @@ export function buildNormalizedLLMCall(options: {
   };
 
   const toolDefinitions = normalizeToolDefinitions(
-    options.toolDefsOverride ?? options.request?.tools
+    options.toolDefsOverride ?? options.request?.tools,
   );
 
   const model =
@@ -225,7 +257,9 @@ export function buildNormalizedLLMCall(options: {
   };
 }
 
-export function buildOtelMetadata(normalized: NormalizedLLMCall): Record<string, any> {
+export function buildOtelMetadata(
+  normalized: NormalizedLLMCall,
+): Record<string, any> {
   const metadata: Record<string, any> = {};
 
   if (normalized.provider) {

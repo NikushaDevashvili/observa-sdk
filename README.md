@@ -45,7 +45,7 @@ const observa = init({
 
 ### Auto-Capture with OpenAI (Recommended)
 
-The easiest way to track LLM calls is using the `observeOpenAI()` wrapper - it automatically captures 90%+ of your LLM interactions:
+The easiest way to track LLM calls is using the `observeOpenAI()` wrapper - it automatically captures 90%+ of your LLM interactions. **Both Chat Completions and Responses API are supported** - the SDK auto-detects which API is used:
 
 ```typescript
 import { init } from "observa-sdk";
@@ -61,32 +61,39 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Wrap with Observa (automatic tracing)
 const wrappedOpenAI = observa.observeOpenAI(openai, {
-  name: 'my-app',
-  userId: 'user_123',
+  name: "my-app",
+  userId: "user_123",
   redact: (data) => {
     // Optional: Scrub sensitive data before sending to Observa
     if (data?.messages) {
-      return { ...data, messages: '[REDACTED]' };
+      return { ...data, messages: "[REDACTED]" };
     }
     return data;
-  }
+  },
 });
 
-// Use wrapped client - automatically tracked!
+// Chat Completions API - automatically tracked!
 const response = await wrappedOpenAI.chat.completions.create({
-  model: 'gpt-4',
-  messages: [{ role: 'user', content: 'Hello!' }],
+  model: "gpt-4",
+  messages: [{ role: "user", content: "Hello!" }],
 });
 
-// Streaming also works automatically
+// OpenAI Responses API - also automatically tracked!
+const responsesResult = await wrappedOpenAI.responses.create({
+  model: "gpt-4o",
+  input: "Hello!",
+});
+console.log(responsesResult.output_text);
+
+// Streaming works for both APIs
 const stream = await wrappedOpenAI.chat.completions.create({
-  model: 'gpt-4',
-  messages: [{ role: 'user', content: 'Hello!' }],
+  model: "gpt-4",
+  messages: [{ role: "user", content: "Hello!" }],
   stream: true,
 });
 
 for await (const chunk of stream) {
-  process.stdout.write(chunk.choices[0]?.delta?.content || '');
+  process.stdout.write(chunk.choices[0]?.delta?.content || "");
 }
 ```
 
@@ -106,15 +113,15 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Wrap with Observa (automatic tracing)
 const wrappedAnthropic = observa.observeAnthropic(anthropic, {
-  name: 'my-app',
-  userId: 'user_123',
+  name: "my-app",
+  userId: "user_123",
 });
 
 // Use wrapped client - automatically tracked!
 const response = await wrappedAnthropic.messages.create({
-  model: 'claude-3-opus-20240229',
+  model: "claude-3-opus-20240229",
   max_tokens: 1024,
-  messages: [{ role: 'user', content: 'Hello!' }],
+  messages: [{ role: "user", content: "Hello!" }],
 });
 ```
 
@@ -144,21 +151,24 @@ const observa = init({
 });
 
 // Wrap Vercel AI SDK functions (automatic tracing)
-const ai = observa.observeVercelAI({ generateText, streamText }, {
-  name: 'my-app',
-  userId: 'user_123',
-});
+const ai = observa.observeVercelAI(
+  { generateText, streamText },
+  {
+    name: "my-app",
+    userId: "user_123",
+  },
+);
 
 // Use wrapped functions - automatically tracked!
 const result = await ai.generateText({
-  model: openai('gpt-4'),
-  prompt: 'Hello!',
+  model: openai("gpt-4"),
+  prompt: "Hello!",
 });
 
 // Streaming also works automatically
 const stream = await ai.streamText({
-  model: openai('gpt-4'),
-  prompt: 'Tell me a joke',
+  model: openai("gpt-4"),
+  prompt: "Tell me a joke",
 });
 
 for await (const chunk of stream.textStream) {
@@ -186,9 +196,12 @@ const observa = init({
   apiUrl: process.env.OBSERVA_API_URL,
 });
 
-const ai = observa.observeVercelAI({ streamText }, {
-  name: "my-nextjs-app",
-});
+const ai = observa.observeVercelAI(
+  { streamText },
+  {
+    name: "my-nextjs-app",
+  },
+);
 
 export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();
@@ -206,6 +219,7 @@ export async function POST(req: Request) {
 #### Client-Side with React (useChat Hook)
 
 **Basic Example:**
+
 ```typescript
 // app/page.tsx
 "use client";
@@ -264,18 +278,20 @@ const result = await ai.streamText({
 Vercel AI SDK supports two model formats:
 
 1. **Provider function** (recommended):
+
 ```typescript
 import { openai } from "@ai-sdk/openai";
 import { anthropic } from "@ai-sdk/anthropic";
 
-model: openai("gpt-4")
-model: anthropic("claude-3-opus-20240229")
+model: openai("gpt-4");
+model: anthropic("claude-3-opus-20240229");
 ```
 
 2. **String format** (for AI Gateway):
+
 ```typescript
-model: "openai/gpt-4"
-model: "anthropic/claude-3-opus-20240229"
+model: "openai/gpt-4";
+model: "anthropic/claude-3-opus-20240229";
 ```
 
 #### Error Handling
@@ -301,14 +317,14 @@ For more control over what gets tracked, use the manual tracking methods:
 ```typescript
 // Use trackLLMCall for fine-grained control
 const spanId = observa.trackLLMCall({
-  model: 'gpt-4',
-  input: 'Hello!',
-  output: 'Hi there!',
+  model: "gpt-4",
+  input: "Hello!",
+  output: "Hi there!",
   inputTokens: 10,
   outputTokens: 5,
   latencyMs: 1200,
-  operationName: 'chat',
-  providerName: 'openai',
+  operationName: "chat",
+  providerName: "openai",
 });
 ```
 
@@ -324,13 +340,13 @@ When you use `observa.observeVercelAI()`, all response objects automatically inc
 
 ```typescript
 const result = await ai.generateText({
-  model: openai('gpt-4'),
-  prompt: 'What is the capital of France?',
+  model: openai("gpt-4"),
+  prompt: "What is the capital of France?",
 });
 
 // Feedback helpers are automatically available on result.observa
-result.observa.like();  // User liked the response
-result.observa.dislike({ comment: "Wrong answer" });  // User disliked with comment
+result.observa.like(); // User liked the response
+result.observa.dislike({ comment: "Wrong answer" }); // User disliked with comment
 
 // All helpers have traceId and parentSpanId already bound - no manual linking needed!
 ```
@@ -355,7 +371,7 @@ export async function POST(req: Request) {
   const { prompt } = await req.json();
 
   const result = await ai.generateText({
-    model: openai('gpt-4'),
+    model: openai("gpt-4"),
     prompt,
   });
 
@@ -399,7 +415,7 @@ export default function Chat() {
       body: JSON.stringify({ prompt }),
     });
     const data = await response.json();
-    
+
     setResponses(prev => [...prev, {
       id: Date.now().toString(),
       text: data.text,
@@ -465,6 +481,7 @@ observa.dislike({
 Here's a complete working example:
 
 **Backend (`app/api/chat/route.ts`):**
+
 ```typescript
 import { generateText } from "ai";
 import { init } from "observa-sdk";
@@ -480,7 +497,7 @@ export async function POST(req: Request) {
   const { prompt } = await req.json();
 
   const result = await ai.generateText({
-    model: openai('gpt-4'),
+    model: openai("gpt-4"),
     prompt,
   });
 
@@ -495,6 +512,7 @@ export async function POST(req: Request) {
 ```
 
 **Frontend (`app/page.tsx`):**
+
 ```typescript
 "use client";
 import { useState } from "react";
@@ -523,7 +541,7 @@ export default function Chat() {
       body: JSON.stringify({ prompt }),
     });
     const data = await response.json();
-    
+
     setMessages(prev => [...prev, {
       id: Date.now().toString(),
       text: data.text,
@@ -567,9 +585,9 @@ export default function Chat() {
         </div>
       ))}
       <form onSubmit={handleSubmit}>
-        <input 
-          value={input} 
-          onChange={(e) => setInput(e.target.value)} 
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
           placeholder="Ask a question..."
         />
         <button type="submit">Send</button>
@@ -580,6 +598,7 @@ export default function Chat() {
 ```
 
 **Key Points:**
+
 - ✅ Feedback helpers are automatically attached to response objects
 - ✅ `traceId` and `parentSpanId` are already bound - no manual linking needed
 - ✅ Expose `result.observa.traceId` and `result.observa.spanId` to your frontend
@@ -677,6 +696,7 @@ interface ObservaInitConfig {
 Initialize the Observa SDK instance.
 
 **Example:**
+
 ```typescript
 import { init } from "observa-sdk";
 
@@ -695,6 +715,7 @@ const observa = init({
 Wrap an OpenAI client with automatic tracing. This is the **recommended** way to track LLM calls.
 
 **Parameters:**
+
 - `client` (required): OpenAI client instance
 - `options` (optional):
   - `name` (optional): Application/service name
@@ -706,26 +727,27 @@ Wrap an OpenAI client with automatic tracing. This is the **recommended** way to
 **Returns**: Wrapped OpenAI client (use it exactly like the original client)
 
 **Example:**
+
 ```typescript
-import OpenAI from 'openai';
+import OpenAI from "openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const wrapped = observa.observeOpenAI(openai, {
-  name: 'my-app',
-  userId: 'user_123',
+  name: "my-app",
+  userId: "user_123",
   redact: (data) => {
     // Sanitize sensitive data
     if (data?.messages) {
-      return { ...data, messages: '[REDACTED]' };
+      return { ...data, messages: "[REDACTED]" };
     }
     return data;
-  }
+  },
 });
 
 // Use wrapped client - automatically tracked!
 const response = await wrapped.chat.completions.create({
-  model: 'gpt-4',
-  messages: [{ role: 'user', content: 'Hello!' }],
+  model: "gpt-4",
+  messages: [{ role: "user", content: "Hello!" }],
 });
 ```
 
@@ -734,28 +756,30 @@ const response = await wrapped.chat.completions.create({
 Wrap an Anthropic client with automatic tracing. Same API as `observeOpenAI()`.
 
 **Example:**
+
 ```typescript
-import Anthropic from '@anthropic-ai/sdk';
+import Anthropic from "@anthropic-ai/sdk";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const wrapped = observa.observeAnthropic(anthropic, {
-  name: 'my-app',
-  redact: (data) => ({ ...data, messages: '[REDACTED]' })
+  name: "my-app",
+  redact: (data) => ({ ...data, messages: "[REDACTED]" }),
 });
 
 // Use wrapped client - automatically tracked!
 const response = await wrapped.messages.create({
-  model: 'claude-3-opus-20240229',
+  model: "claude-3-opus-20240229",
   max_tokens: 1024,
-  messages: [{ role: 'user', content: 'Hello!' }],
+  messages: [{ role: "user", content: "Hello!" }],
 });
 ```
 
 ### `observa.observeVercelAI(aiSdk, options?)`
 
-Wrap Vercel AI SDK functions (`generateText`, `streamText`) with automatic tracing. Vercel AI SDK is a unified SDK that works with multiple providers (OpenAI, Anthropic, Google, etc.).
+Wrap Vercel AI SDK functions (`generateText`, `streamText`) with automatic tracing. Vercel AI SDK is a unified SDK that works with multiple providers (OpenAI, Anthropic, Google, etc.). When using OpenAI's Responses API via `openai.responses('gpt-4o')`, tracing works automatically - no SDK changes needed.
 
 **Parameters:**
+
 - `aiSdk` (required): Object containing Vercel AI SDK functions (e.g., `{ generateText, streamText }`)
 - `options` (optional):
   - `name` (optional): Application/service name
@@ -767,32 +791,36 @@ Wrap Vercel AI SDK functions (`generateText`, `streamText`) with automatic traci
 **Returns**: Wrapped AI SDK object with the same functions (use them exactly like the original functions)
 
 **Example:**
-```typescript
-import { generateText, streamText } from 'ai';
-import { openai } from '@ai-sdk/openai';
 
-const ai = observa.observeVercelAI({ generateText, streamText }, {
-  name: 'my-app',
-  userId: 'user_123',
-  redact: (data) => {
-    // Sanitize sensitive data
-    if (data?.prompt) {
-      return { ...data, prompt: '[REDACTED]' };
-    }
-    return data;
-  }
-});
+```typescript
+import { generateText, streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+const ai = observa.observeVercelAI(
+  { generateText, streamText },
+  {
+    name: "my-app",
+    userId: "user_123",
+    redact: (data) => {
+      // Sanitize sensitive data
+      if (data?.prompt) {
+        return { ...data, prompt: "[REDACTED]" };
+      }
+      return data;
+    },
+  },
+);
 
 // Use wrapped functions - automatically tracked!
 const result = await ai.generateText({
-  model: openai('gpt-4'),
-  prompt: 'Hello!',
+  model: openai("gpt-4"),
+  prompt: "Hello!",
 });
 
 // Streaming also works automatically
 const stream = await ai.streamText({
-  model: openai('gpt-4'),
-  prompt: 'Tell me a joke',
+  model: openai("gpt-4"),
+  prompt: "Tell me a joke",
 });
 
 for await (const chunk of stream.textStream) {
@@ -802,12 +830,14 @@ for await (const chunk of stream.textStream) {
 
 ### `observa.observeLangChain(options?)`
 
-Observe LangChain operations using callback handlers. Returns a callback handler instance that tracks chains, LLM calls, tools, retrievers, and agents with proper hierarchy.
+Observe LangChain operations using callback handlers. Returns a callback handler instance that tracks chains, LLM calls, tools, retrievers, and agents with proper hierarchy. Works with both Chat Completions and Responses API when LangChain uses OpenAI - no SDK changes needed.
 
 **Requirements:**
+
 - Install `@langchain/core` as a peer dependency: `npm install @langchain/core`
 
 **Parameters:**
+
 - `options` (optional):
   - `name` (optional): Application/service name
   - `tags` (optional): Array of tags
@@ -819,6 +849,7 @@ Observe LangChain operations using callback handlers. Returns a callback handler
 **Returns**: CallbackHandler instance for use with LangChain `callbacks` option
 
 **Example - Basic Usage:**
+
 ```typescript
 import { init } from "observa-sdk";
 import { ChatOpenAI } from "@langchain/openai";
@@ -840,13 +871,11 @@ const prompt = ChatPromptTemplate.fromTemplate("Tell me about {topic}");
 const chain = prompt | llm;
 
 // Invoke with handler - automatically tracked!
-const result = await chain.invoke(
-  { topic: "AI" },
-  { callbacks: [handler] }
-);
+const result = await chain.invoke({ topic: "AI" }, { callbacks: [handler] });
 ```
 
 **Example - Metadata via Config (LangFuse-compatible):**
+
 ```typescript
 // Extract metadata from chain config (overrides handler options)
 const result = await chain.invoke(
@@ -856,31 +885,30 @@ const result = await chain.invoke(
     metadata: {
       observa_user_id: "user-123",
       observa_session_id: "session-456",
-      observa_tags: ["production", "langchain"]
+      observa_tags: ["production", "langchain"],
     },
-    runName: "my-trace-name" // Optional: name for trace
-  }
+    runName: "my-trace-name", // Optional: name for trace
+  },
 );
 ```
 
 **Example - Distributed Tracing:**
+
 ```typescript
 // Create trace manually, then attach LangChain handler
 const traceId = observa.startTrace({
   name: "my-workflow",
-  userId: "user-123"
+  userId: "user-123",
 });
 
 const handler = observa.observeLangChain({ traceId });
 
 // All LangChain operations will be part of this trace
-const result = await chain.invoke(
-  { topic: "AI" },
-  { callbacks: [handler] }
-);
+const result = await chain.invoke({ topic: "AI" }, { callbacks: [handler] });
 ```
 
 **Example - LangGraph Support:**
+
 ```typescript
 // Works automatically with LangGraph (uses same callback system)
 import { StateGraph } from "@langchain/langgraph";
@@ -897,20 +925,18 @@ await app.invoke(
 ```
 
 **Example - Tools and Agents:**
+
 ```typescript
 import { createAgent, tool } from "@langchain/core/agents";
 import * as z from "zod";
 
-const getWeather = tool(
-  (input) => `It's sunny in ${input.city}!`,
-  {
-    name: "get_weather",
-    description: "Get the weather for a city",
-    schema: z.object({
-      city: z.string(),
-    }),
-  }
-);
+const getWeather = tool((input) => `It's sunny in ${input.city}!`, {
+  name: "get_weather",
+  description: "Get the weather for a city",
+  schema: z.object({
+    city: z.string(),
+  }),
+});
 
 const agent = createAgent({
   model: new ChatOpenAI({ model: "gpt-4" }),
@@ -922,19 +948,17 @@ const handler = observa.observeLangChain({ name: "weather-agent" });
 // Tool calls are automatically tracked
 const result = await agent.invoke(
   { messages: [{ role: "user", content: "What's the weather in SF?" }] },
-  { callbacks: [handler] }
+  { callbacks: [handler] },
 );
 ```
 
 **Example - Streaming:**
+
 ```typescript
 const handler = observa.observeLangChain({ name: "streaming-chain" });
 
 // Streaming is automatically tracked
-const stream = await chain.stream(
-  { topic: "AI" },
-  { callbacks: [handler] }
-);
+const stream = await chain.stream({ topic: "AI" }, { callbacks: [handler] });
 
 for await (const chunk of stream) {
   console.log(chunk);
@@ -957,6 +981,7 @@ await observa.flush();
 Start a new trace for manual trace management. Returns the trace ID.
 
 **Parameters:**
+
 - `options.name` (optional): Trace name
 - `options.metadata` (optional): Custom metadata object
 - `options.conversationId` (optional): Conversation identifier
@@ -966,12 +991,13 @@ Start a new trace for manual trace management. Returns the trace ID.
 **Returns**: `string` - The trace ID
 
 **Example:**
+
 ```typescript
 const traceId = observa.startTrace({
   name: "RAG Query",
   conversationId: "conv-123",
   userId: "user-456",
-  metadata: { feature: "chat", version: "2.0" }
+  metadata: { feature: "chat", version: "2.0" },
 });
 ```
 
@@ -980,11 +1006,13 @@ const traceId = observa.startTrace({
 End the current trace and send all buffered events. Must be called after `startTrace()`.
 
 **Parameters:**
+
 - `options.outcome` (optional): `"success"` | `"error"` | `"timeout"` (default: `"success"`)
 
 **Returns**: `Promise<string>` - The trace ID
 
 **Example:**
+
 ```typescript
 await observa.endTrace({ outcome: "success" });
 ```
@@ -994,6 +1022,7 @@ await observa.endTrace({ outcome: "success" });
 Track an LLM call with complete OTEL compliance. **This is the recommended method** for tracking LLM calls.
 
 **Parameters:**
+
 - `model` (required): Model name
 - `input`, `output`: Input/output text
 - `inputTokens`, `outputTokens`, `totalTokens`: Token counts
@@ -1009,6 +1038,7 @@ Track an LLM call with complete OTEL compliance. **This is the recommended metho
 - And more... (see SDK_SOTA_IMPLEMENTATION.md for complete list)
 
 **Example:**
+
 ```typescript
 const spanId = observa.trackLLMCall({
   model: "gpt-4-turbo",
@@ -1022,7 +1052,7 @@ const spanId = observa.trackLLMCall({
   temperature: 0.7,
   topP: 0.9,
   inputCost: 0.00245,
-  outputCost: 0.01024
+  outputCost: 0.01024,
 });
 ```
 
@@ -1031,6 +1061,7 @@ const spanId = observa.trackLLMCall({
 Track an embedding operation with full OTEL support.
 
 **Example:**
+
 ```typescript
 const spanId = observa.trackEmbedding({
   model: "text-embedding-ada-002",
@@ -1038,7 +1069,7 @@ const spanId = observa.trackEmbedding({
   inputTokens: 10,
   outputTokens: 1536,
   latencyMs: 45,
-  cost: 0.0001
+  cost: 0.0001,
 });
 ```
 
@@ -1047,6 +1078,7 @@ const spanId = observa.trackEmbedding({
 Track vector database operations (Pinecone, Weaviate, Qdrant, etc.).
 
 **Example:**
+
 ```typescript
 const spanId = observa.trackVectorDbOperation({
   operationType: "vector_search",
@@ -1055,7 +1087,7 @@ const spanId = observa.trackVectorDbOperation({
   resultsCount: 10,
   latencyMs: 30,
   cost: 0.0005,
-  providerName: "pinecone"
+  providerName: "pinecone",
 });
 ```
 
@@ -1064,12 +1096,13 @@ const spanId = observa.trackVectorDbOperation({
 Track cache hit/miss operations.
 
 **Example:**
+
 ```typescript
 const spanId = observa.trackCacheOperation({
   cacheBackend: "redis",
   hitStatus: "hit",
   latencyMs: 2,
-  savedCost: 0.01269
+  savedCost: 0.01269,
 });
 ```
 
@@ -1078,11 +1111,12 @@ const spanId = observa.trackCacheOperation({
 Track agent creation.
 
 **Example:**
+
 ```typescript
 const spanId = observa.trackAgentCreate({
   agentName: "Customer Support Agent",
   toolsBound: ["web_search", "database_query"],
-  modelConfig: { model: "gpt-4-turbo", temperature: 0.7 }
+  modelConfig: { model: "gpt-4-turbo", temperature: 0.7 },
 });
 ```
 
@@ -1091,6 +1125,7 @@ const spanId = observa.trackAgentCreate({
 Track a tool call with OTEL standardization.
 
 **New Parameters:**
+
 - `toolType`: "function" | "extension" | "datastore"
 - `toolDescription`: Tool description
 - `toolCallId`: Unique tool invocation ID
@@ -1101,6 +1136,7 @@ Track a tool call with OTEL standardization.
 Track retrieval operations with vector metadata.
 
 **New Parameters:**
+
 - `embeddingModel`: Model used for embeddings
 - `embeddingDimensions`: Vector dimensions
 - `vectorMetric`: Similarity metric
@@ -1111,6 +1147,7 @@ Track retrieval operations with vector metadata.
 Track errors with structured classification.
 
 **New Parameters:**
+
 - `errorCategory`: Error category
 - `errorCode`: Error code
 
@@ -1233,7 +1270,7 @@ function ChatWithFeedback() {
   const handleFeedback = async (messageId: string, type: 'like' | 'dislike') => {
     // Get the message from your API response
     // (traceId and spanId are automatically included in response if using instrumentation)
-    
+
     // If using server actions or custom API:
     await fetch('/api/feedback', {
       method: 'POST',
@@ -1379,7 +1416,7 @@ await observa.endTrace();
 
 1. **Always include context**: Provide `conversationId`, `userId`, and `sessionId` when available for better analytics
 2. **Link to spans**: Use `parentSpanId` to attach feedback to specific LLM calls or operations
-3. **Use appropriate types**: 
+3. **Use appropriate types**:
    - `"like"` / `"dislike"` for binary feedback
    - `"rating"` for 1-5 star ratings
    - `"correction"` for user corrections or detailed feedback

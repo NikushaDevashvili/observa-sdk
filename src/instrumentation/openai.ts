@@ -20,6 +20,52 @@ type OpenAI = any;
 // WeakMap Cache for Memoization (CRITICAL for object identity)
 const proxyCache = new WeakMap<object, any>();
 
+// --- Responses API helpers ---
+function isResponsesAPIRequest(req: any): boolean {
+  return req && req.input !== undefined && !req.messages;
+}
+
+function isResponsesAPIResponse(res: any): boolean {
+  return res?.object === "response" && res?.output !== undefined;
+}
+
+function extractResponsesInput(req: any): {
+  text: string | null;
+  messages: any;
+} {
+  if (!req?.input) return { text: null, messages: null };
+  if (typeof req.input === "string")
+    return {
+      text: req.input,
+      messages: [{ role: "user", content: req.input }],
+    };
+  if (Array.isArray(req.input)) {
+    const text = req.input
+      .filter((i: any) => i?.content?.[0]?.text ?? i?.content)
+      .map(
+        (i: any) =>
+          i.content?.[0]?.text ??
+          (typeof i.content === "string" ? i.content : ""),
+      )
+      .filter(Boolean)
+      .join("\n");
+    return { text: text || null, messages: req.input };
+  }
+  return { text: null, messages: null };
+}
+
+function extractResponsesOutputText(res: any): string | null {
+  if (res?.output_text) return res.output_text; // SDK helper
+  if (!Array.isArray(res?.output)) return null;
+  for (const item of res.output) {
+    if (item?.type === "message" && Array.isArray(item?.content)) {
+      for (const part of item.content) {
+        if (part?.type === "output_text" && part?.text) return part.text;
+      }
+    }
+  }
+  return null;
+}
 
 export interface ObserveOptions {
   name?: string;
@@ -34,6 +80,9 @@ export interface ObserveOptions {
 
 /**
  * Observe OpenAI client - wraps client with automatic tracing
+ *
+ * Supports both Chat Completions and Responses API. Auto-detects which API
+ * is used from request/response shape.
  *
  * @param client - OpenAI client instance
  * @param options - Observation options (name, tags, userId, sessionId, redact)
@@ -50,13 +99,16 @@ export interface ObserveOptions {
  *   redact: (data) => ({ ...data, messages: '[REDACTED]' })
  * });
  *
- * // Use wrapped client - automatically tracked!
- * await wrapped.chat.completions.create({ ... });
+ * // Chat Completions - automatically tracked!
+ * await wrapped.chat.completions.create({ model: 'gpt-4', messages: [...] });
+ *
+ * // Responses API - also automatically tracked!
+ * await wrapped.responses.create({ model: 'gpt-4o', input: 'Hello!' });
  * ```
  */
 export function observeOpenAI(
   client: OpenAI,
-  options?: ObserveOptions
+  options?: ObserveOptions,
 ): OpenAI {
   // Return cached proxy if exists to maintain identity (client === client)
   if (proxyCache.has(client)) {
@@ -78,7 +130,7 @@ export function observeOpenAI(
         "✅ CORRECT (using instance method):\n" +
         "  import { init } from 'observa-sdk';\n" +
         "  const observa = init({ apiKey: '...' });\n" +
-        "  const wrapped = observa.observeOpenAI(openai);\n"
+        "  const wrapped = observa.observeOpenAI(openai);\n",
     );
   }
 
@@ -126,7 +178,7 @@ export function observeOpenAI(
 async function traceOpenAICall(
   originalFn: Function,
   args: any[],
-  options?: ObserveOptions
+  options?: ObserveOptions,
 ) {
   const startTime = Date.now();
   const requestParams = args[0] || {};
@@ -134,12 +186,17 @@ async function traceOpenAICall(
   const preCallTools = requestParams?.tools ?? null;
 
   // Extract input text early (before operation starts) to ensure it's captured even on errors
-  const inputText =
-    requestParams.messages
-      ?.map((m: any) => m.content)
-      .filter(Boolean)
-      .join("\n") || null;
-  const inputMessages = requestParams.messages || null;
+  const isResponsesReq = isResponsesAPIRequest(requestParams);
+  const { text: inputText, messages: inputMessages } = isResponsesReq
+    ? extractResponsesInput(requestParams)
+    : {
+        text:
+          requestParams.messages
+            ?.map((m: any) => m.content)
+            .filter(Boolean)
+            .join("\n") || null,
+        messages: requestParams.messages || null,
+      };
   const model = requestParams.model || "unknown";
 
   try {
@@ -160,7 +217,7 @@ async function traceOpenAICall(
             options,
             fullResponse.timeToFirstToken,
             fullResponse.streamingDuration,
-            preCallTools
+            preCallTools,
           );
         },
         (err: any) =>
@@ -172,13 +229,21 @@ async function traceOpenAICall(
             inputText,
             inputMessages,
             model,
-            preCallTools
+            preCallTools,
           ),
-        "openai"
+        "openai",
       );
     } else {
       // Standard await -> Send Trace to Observa
-      recordTrace(requestParams, result, startTime, options, undefined, undefined, preCallTools);
+      recordTrace(
+        requestParams,
+        result,
+        startTime,
+        options,
+        undefined,
+        undefined,
+        preCallTools,
+      );
       return result;
     }
   } catch (error) {
@@ -190,7 +255,7 @@ async function traceOpenAICall(
       inputText,
       inputMessages,
       model,
-      preCallTools
+      preCallTools,
     );
     throw error; // Always re-throw user errors
   }
@@ -206,7 +271,7 @@ function recordTrace(
   opts?: ObserveOptions,
   timeToFirstToken?: number | null,
   streamingDuration?: number | null,
-  preCallTools?: any
+  preCallTools?: any,
 ) {
   const duration = Date.now() - start;
 
@@ -226,7 +291,7 @@ function recordTrace(
       console.error(
         "[Observa] ⚠️ CRITICAL: observa instance not provided to observeOpenAI(). " +
           "Tracking is disabled. Make sure you're using observa.observeOpenAI() " +
-          "instead of importing observeOpenAI directly from 'observa-sdk/instrumentation'."
+          "instead of importing observeOpenAI directly from 'observa-sdk/instrumentation'.",
       );
       return; // Silently fail (don't crash user's app)
     }
@@ -241,27 +306,45 @@ function recordTrace(
       });
       const toolDefinitions = normalized.toolDefinitions;
       const otelMetadata = buildOtelMetadata(normalized);
-      // Extract input text from messages
-      const inputText =
-        sanitizedReq.messages
-          ?.map((m: any) => m.content)
-          .filter(Boolean)
-          .join("\n") || null;
+      const isResponses = isResponsesAPIResponse(sanitizedRes);
 
-      // Extract output text from response
-      const outputText = sanitizedRes?.choices?.[0]?.message?.content || null;
-      
-      // Extract finish reason
-      const finishReason = sanitizedRes?.choices?.[0]?.finish_reason || null;
-      
+      // Extract input/output/finish reason (shape-aware for Chat vs Responses API)
+      const inputText = isResponses
+        ? extractResponsesInput(sanitizedReq).text
+        : sanitizedReq.messages
+            ?.map((m: any) => m.content)
+            .filter(Boolean)
+            .join("\n") || null;
+
+      const outputText = isResponses
+        ? extractResponsesOutputText(sanitizedRes)
+        : sanitizedRes?.choices?.[0]?.message?.content || null;
+
+      const finishReason = isResponses
+        ? sanitizedRes.status === "failed"
+          ? sanitizedRes.error?.code || "error"
+          : sanitizedRes.status
+        : sanitizedRes?.choices?.[0]?.finish_reason || null;
+
       // CRITICAL FIX: Detect empty responses
-      const isEmptyResponse = !outputText || (typeof outputText === 'string' && outputText.trim().length === 0);
-      
-      // CRITICAL FIX: Detect failure finish reasons
-      const isFailureFinishReason = finishReason === 'content_filter' || finishReason === 'length';
-      
+      const isEmptyResponse =
+        !outputText ||
+        (typeof outputText === "string" && outputText.trim().length === 0);
+
+      // CRITICAL FIX: Detect failure finish reasons (Chat + Responses semantics)
+      const responsesMaxTokens =
+        isResponses &&
+        sanitizedRes.status === "incomplete" &&
+        sanitizedRes.incomplete_details?.reason === "max_tokens";
+      const isFailureFinishReason =
+        finishReason === "content_filter" ||
+        finishReason === "length" ||
+        sanitizedRes?.status === "failed" ||
+        responsesMaxTokens;
+
       // If response is empty or has failure finish reason, record as error
       if (isEmptyResponse || isFailureFinishReason) {
+        const usage = normalized.usage;
         // Record LLM call with null output to show the attempt
         opts.observa.trackLLMCall({
           model: sanitizedReq.model || sanitizedRes?.model || "unknown",
@@ -269,9 +352,9 @@ function recordTrace(
           output: null, // No output on error
           inputMessages: normalized.inputMessages,
           outputMessages: normalized.outputMessages,
-          inputTokens: sanitizedRes?.usage?.prompt_tokens || null,
-          outputTokens: sanitizedRes?.usage?.completion_tokens || null,
-          totalTokens: sanitizedRes?.usage?.total_tokens || null,
+          inputTokens: usage.inputTokens ?? null,
+          outputTokens: usage.outputTokens ?? null,
+          totalTokens: usage.totalTokens ?? null,
           latencyMs: duration,
           timeToFirstTokenMs: timeToFirstToken || null,
           streamingDurationMs: streamingDuration || null,
@@ -287,16 +370,25 @@ function recordTrace(
         });
 
         // Record error event with appropriate error type
-        const errorType = isEmptyResponse ? "empty_response" : (finishReason === 'content_filter' ? "content_filtered" : "response_truncated");
-        const errorMessage = isEmptyResponse 
-          ? "AI returned empty response" 
-          : (finishReason === 'content_filter' 
-            ? "AI response was filtered due to content policy" 
-            : "AI response was truncated due to token limit");
-        
+        const isResponsesFailed = sanitizedRes?.status === "failed";
+        const errorType = isResponsesFailed
+          ? sanitizedRes?.error?.code || "api_error"
+          : isEmptyResponse
+            ? "empty_response"
+            : finishReason === "content_filter"
+              ? "content_filtered"
+              : "response_truncated";
+        const errorMessage = isResponsesFailed
+          ? sanitizedRes?.error?.message || "API request failed"
+          : isEmptyResponse
+            ? "AI returned empty response"
+            : finishReason === "content_filter"
+              ? "AI response was filtered due to content policy"
+              : "AI response was truncated due to token limit";
+
         opts.observa.trackError({
-          errorType: errorType,
-          errorMessage: errorMessage,
+          errorType,
+          errorMessage,
           stackTrace: null,
           context: {
             request: sanitizedReq,
@@ -307,24 +399,30 @@ function recordTrace(
             provider: "openai",
             duration_ms: duration,
           },
-          errorCategory: finishReason === 'content_filter' ? "validation_error" : (finishReason === 'length' ? "model_error" : "unknown_error"),
+          errorCategory:
+            finishReason === "content_filter"
+              ? "validation_error"
+              : finishReason === "length" || responsesMaxTokens
+                ? "model_error"
+                : "unknown_error",
           errorCode: isEmptyResponse ? "empty_response" : finishReason,
         });
-        
+
         // Don't record as successful trace
         return;
       }
 
-      // Normal successful response - continue with existing logic
+      // Normal successful response - use normalized usage
+      const usage = normalized.usage;
       opts.observa.trackLLMCall({
         model: sanitizedReq.model || sanitizedRes?.model || "unknown",
         input: inputText,
         output: outputText,
         inputMessages: normalized.inputMessages,
         outputMessages: normalized.outputMessages,
-        inputTokens: sanitizedRes?.usage?.prompt_tokens || null,
-        outputTokens: sanitizedRes?.usage?.completion_tokens || null,
-        totalTokens: sanitizedRes?.usage?.total_tokens || null,
+        inputTokens: usage.inputTokens ?? null,
+        outputTokens: usage.outputTokens ?? null,
+        totalTokens: usage.totalTokens ?? null,
         latencyMs: duration,
         timeToFirstTokenMs: timeToFirstToken || null,
         streamingDurationMs: streamingDuration || null,
@@ -357,7 +455,7 @@ function recordError(
   preExtractedInputText?: string | null,
   preExtractedInputMessages?: any,
   preExtractedModel?: string,
-  preCallTools?: any
+  preCallTools?: any,
 ) {
   const duration = Date.now() - start;
 
@@ -372,7 +470,7 @@ function recordError(
       console.error(
         "[Observa] ⚠️ CRITICAL: observa instance not provided to observeOpenAI(). " +
           "Error tracking is disabled. Make sure you're using observa.observeOpenAI() " +
-          "instead of importing observeOpenAI directly from 'observa-sdk/instrumentation'."
+          "instead of importing observeOpenAI directly from 'observa-sdk/instrumentation'.",
       );
       return; // Silently fail (don't crash user's app)
     }
@@ -394,13 +492,18 @@ function recordError(
       let inputMessages: any = preExtractedInputMessages || null;
 
       if (!inputText) {
-        // Fallback: Extract input text from messages
-        inputMessages = sanitizedReq.messages || null;
-        inputText =
-          sanitizedReq.messages
-            ?.map((m: any) => m.content)
-            .filter(Boolean)
-            .join("\n") || null;
+        if (isResponsesAPIRequest(sanitizedReq)) {
+          const extracted = extractResponsesInput(sanitizedReq);
+          inputText = extracted.text;
+          inputMessages = extracted.messages;
+        } else {
+          inputMessages = sanitizedReq.messages || null;
+          inputText =
+            sanitizedReq.messages
+              ?.map((m: any) => m.content)
+              .filter(Boolean)
+              .join("\n") || null;
+        }
       }
 
       // Extract error information using error utilities
