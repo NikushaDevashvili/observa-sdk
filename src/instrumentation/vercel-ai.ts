@@ -173,7 +173,7 @@ function resolveModelForTracking(...candidates: any[]): string {
 }
 
 function estimateTokensFromText(
-  text: string | null | undefined
+  text: string | null | undefined,
 ): number | null {
   if (!text) return null;
   return Math.ceil(text.length / 4);
@@ -181,7 +181,7 @@ function estimateTokensFromText(
 
 function estimateCostFromModel(
   model: string | null | undefined,
-  totalTokens: number | null
+  totalTokens: number | null,
 ): number | null {
   if (!model || totalTokens === null || totalTokens === undefined) return null;
   const normalized = String(model).toLowerCase();
@@ -209,7 +209,9 @@ function normalizeMessages(messages: any): any[] {
   return [messages];
 }
 
-function buildSystemInstructions(system: any): Array<{ type: string; content: any }> | null {
+function buildSystemInstructions(
+  system: any,
+): Array<{ type: string; content: any }> | null {
   if (!system) return null;
   if (Array.isArray(system)) {
     return system.map((item) => ({
@@ -220,7 +222,10 @@ function buildSystemInstructions(system: any): Array<{ type: string; content: an
   return [{ type: "system", content: system }];
 }
 
-function prependSystemMessage(messages: any[] | null, system: any): any[] | null {
+function prependSystemMessage(
+  messages: any[] | null,
+  system: any,
+): any[] | null {
   if (!system) return messages;
   const normalized = messages ? [...messages] : [];
   const firstRole = normalized[0]?.role;
@@ -244,18 +249,18 @@ function extractMessageText(message: any): string {
 /**
  * Extract only new messages from a conversation (last user message + any messages after it)
  * This prevents duplicating the full conversation history in each trace.
- * 
+ *
  * Example:
  * - Full conversation: [user1, assistant1, tool1, user2, assistant2, user3]
  * - Returns: [user3] (only the new user message)
- * 
+ *
  * If there are assistant/tool responses after the last user message, include those too:
  * - Full conversation: [user1, assistant1, user2, assistant2, tool2]
  * - Returns: [user2, assistant2, tool2] (new user message + responses in this call)
  */
 function extractNewMessages(messages: any[]): any[] {
   if (!messages || messages.length === 0) return [];
-  
+
   // Find the last user message index
   let lastUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -264,13 +269,13 @@ function extractNewMessages(messages: any[]): any[] {
       break;
     }
   }
-  
+
   // If we found a user message, return from that message onwards
   // This includes: last user message + any assistant/tool responses after it
   if (lastUserIndex >= 0) {
     return messages.slice(lastUserIndex);
   }
-  
+
   // Fallback: if no user message found, return the last message (might be assistant/tool)
   // This handles edge cases where conversation starts with assistant message
   return messages.slice(-1);
@@ -416,7 +421,7 @@ function extractToolCallsFromResponse(res: any): ToolCallInfo[] {
   const steps = normalizeMessages(res?.steps);
   for (const step of steps) {
     const stepToolCalls = normalizeMessages(
-      step?.toolCalls || step?.tool_calls
+      step?.toolCalls || step?.tool_calls,
     );
     for (const call of stepToolCalls) {
       const toolName =
@@ -441,7 +446,7 @@ function extractToolCallsFromResponse(res: any): ToolCallInfo[] {
   }
 
   const messageToolCalls = extractToolCallsFromMessages(
-    normalizeMessages(res?.messages)
+    normalizeMessages(res?.messages),
   );
   return [...toolCalls, ...messageToolCalls];
 }
@@ -454,7 +459,7 @@ function attachFeedbackHelpers(
     responseId?: string | null;
     model?: string | null;
   },
-  options?: ObserveOptions
+  options?: ObserveOptions,
 ): void {
   if (!target || !traceInfo) return;
   const traceId = traceInfo.traceId;
@@ -499,35 +504,33 @@ function attachFeedbackHelpers(
   // #endregion
 
   // Convenience methods for like/dislike feedback
-  const like =
-    submitFeedback
-      ? (opts?: {
-          comment?: string;
-          conversationId?: string;
-          sessionId?: string;
-          userId?: string;
-        }) =>
-          submitFeedback({
-            type: "like",
-            outcome: "success",
-            ...opts,
-          })
-      : undefined;
+  const like = submitFeedback
+    ? (opts?: {
+        comment?: string;
+        conversationId?: string;
+        sessionId?: string;
+        userId?: string;
+      }) =>
+        submitFeedback({
+          type: "like",
+          outcome: "success",
+          ...opts,
+        })
+    : undefined;
 
-  const dislike =
-    submitFeedback
-      ? (opts?: {
-          comment?: string;
-          conversationId?: string;
-          sessionId?: string;
-          userId?: string;
-        }) =>
-          submitFeedback({
-            type: "dislike",
-            outcome: "failure",
-            ...opts,
-          })
-      : undefined;
+  const dislike = submitFeedback
+    ? (opts?: {
+        comment?: string;
+        conversationId?: string;
+        sessionId?: string;
+        userId?: string;
+      }) =>
+        submitFeedback({
+          type: "dislike",
+          outcome: "failure",
+          ...opts,
+        })
+    : undefined;
 
   target.observa = {
     ...(target.observa || {}),
@@ -555,7 +558,7 @@ function attachResultMetadata(
     toolCalls?: ToolCallInfo[];
     inputText?: string | null;
     outputText?: string | null;
-  }
+  },
 ): void {
   if (!target || !metadata) return;
   target.observa = {
@@ -583,7 +586,7 @@ function attachResultMetadata(
 function wrapToolsForTracking(
   requestParams: any,
   options?: ObserveOptions,
-  toolCallBuffer?: ToolCallInfo[]
+  toolCallBuffer?: ToolCallInfo[],
 ): { requestParams: any; toolsWrapped: boolean } | null {
   // #region agent log
   fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
@@ -655,7 +658,7 @@ function wrapToolsForTracking(
               runId: "run1",
               hypothesisId: "A",
             }),
-          }
+          },
         ).catch(() => {});
         // #endregion
         try {
@@ -681,7 +684,7 @@ function wrapToolsForTracking(
                 runId: "run1",
                 hypothesisId: "A",
               }),
-            }
+            },
           ).catch(() => {});
           // #endregion
           if (toolCallBuffer) {
@@ -716,7 +719,7 @@ function wrapToolsForTracking(
                 runId: "run1",
                 hypothesisId: "G",
               }),
-            }
+            },
           ).catch(() => {});
           // #endregion
           return result;
@@ -741,7 +744,7 @@ function wrapToolsForTracking(
                 runId: "run1",
                 hypothesisId: "A",
               }),
-            }
+            },
           ).catch(() => {});
           // #endregion
           if (toolCallBuffer) {
@@ -776,7 +779,7 @@ function wrapToolsForTracking(
                 runId: "run1",
                 hypothesisId: "G",
               }),
-            }
+            },
           ).catch(() => {});
           // #endregion
           throw error;
@@ -811,7 +814,7 @@ function wrapToolsForTracking(
               runId: "run1",
               hypothesisId: "A",
             }),
-          }
+          },
         ).catch(() => {});
         // #endregion
         try {
@@ -837,7 +840,7 @@ function wrapToolsForTracking(
                 runId: "run1",
                 hypothesisId: "A",
               }),
-            }
+            },
           ).catch(() => {});
           // #endregion
           if (toolCallBuffer) {
@@ -872,7 +875,7 @@ function wrapToolsForTracking(
                 runId: "run1",
                 hypothesisId: "G",
               }),
-            }
+            },
           ).catch(() => {});
           // #endregion
           return result;
@@ -897,7 +900,7 @@ function wrapToolsForTracking(
                 runId: "run1",
                 hypothesisId: "A",
               }),
-            }
+            },
           ).catch(() => {});
           // #endregion
           if (toolCallBuffer) {
@@ -932,7 +935,7 @@ function wrapToolsForTracking(
                 runId: "run1",
                 hypothesisId: "G",
               }),
-            }
+            },
           ).catch(() => {});
           // #endregion
           throw error;
@@ -982,7 +985,7 @@ function wrapToolsForTracking(
 async function traceGenerateText(
   originalFn: GenerateTextFn,
   args: any[],
-  options?: ObserveOptions
+  options?: ObserveOptions,
 ) {
   const startTime = Date.now();
   const requestParams = args[0] || {};
@@ -1131,7 +1134,7 @@ async function traceGenerateText(
   const wrapResult = wrapToolsForTracking(
     requestParams,
     options,
-    toolCallBuffer
+    toolCallBuffer,
   );
   const toolsWrapped = wrapResult?.toolsWrapped ?? false;
   if (wrapResult?.requestParams) {
@@ -1176,7 +1179,7 @@ async function traceGenerateText(
       toolsWrapped,
       toolCallBuffer,
       traceIdForRequest,
-      preCallTools
+      preCallTools,
     );
 
     if (traceInfo) {
@@ -1188,7 +1191,7 @@ async function traceGenerateText(
           responseId,
           model: responseModel,
         },
-        options
+        options,
       );
       attachResultMetadata(result, traceInfo);
     }
@@ -1212,7 +1215,7 @@ async function traceGenerateText(
       traceStarted,
       toolCallBuffer,
       traceIdForRequest,
-      preCallTools
+      preCallTools,
     );
     throw error;
   }
@@ -1227,7 +1230,7 @@ function wrapReadableStream(
   stream: ReadableStream<Uint8Array>,
   onComplete: (fullData: any) => void | Promise<void>,
   onError: (error: any) => void,
-  allowEmptyResponse?: () => boolean
+  allowEmptyResponse?: () => boolean,
 ): ReadableStream<Uint8Array> {
   // Use tee() to split the stream - one for user, one for tracking
   const [userStream, trackingStream] = stream.tee();
@@ -1251,8 +1254,8 @@ function wrapReadableStream(
           reader.cancel(); // Cancel the reader
           reject(
             new Error(
-              `Stream timeout after ${timeoutMs}ms - no response received`
-            )
+              `Stream timeout after ${timeoutMs}ms - no response received`,
+            ),
           );
         }, timeoutMs);
       });
@@ -1336,7 +1339,9 @@ function wrapReadableStream(
           chunks: chunks.length,
           fullTextLength: fullText?.length || 0,
         });
-        const shouldAllowEmpty = allowEmptyResponse ? allowEmptyResponse() : false;
+        const shouldAllowEmpty = allowEmptyResponse
+          ? allowEmptyResponse()
+          : false;
         if (!shouldAllowEmpty) {
           onError({
             name: "EmptyResponseError",
@@ -1362,7 +1367,7 @@ function wrapReadableStream(
             ? Date.now() - firstTokenTime
             : null,
           totalLatency: Date.now() - streamStartTime,
-        })
+        }),
       ).catch((e) => {
         console.error("[Observa] Error in onComplete callback:", e);
         onError(e);
@@ -1398,7 +1403,7 @@ function wrapReadableStream(
 async function traceStreamText(
   originalFn: StreamTextFn,
   args: any[],
-  options?: ObserveOptions
+  options?: ObserveOptions,
 ) {
   // #region agent log
   console.log("[Observa DEBUG] traceStreamText entry:", {
@@ -1621,7 +1626,7 @@ async function traceStreamText(
   const wrapResult = wrapToolsForTracking(
     requestParams,
     options,
-    toolCallBuffer
+    toolCallBuffer,
   );
   const toolsWrapped = wrapResult?.toolsWrapped ?? false;
   // #region agent log
@@ -1713,7 +1718,7 @@ async function traceStreamText(
             runId: "run1",
             hypothesisId: "C",
           }),
-        }
+        },
       ).catch(() => {});
       // #endregion
       if (isReadableStream) {
@@ -1747,7 +1752,7 @@ async function traceStreamText(
                   runId: "run1",
                   hypothesisId: "A",
                 }),
-              }
+              },
             ).catch(() => {});
             // #endregion
             // CRITICAL FIX: Extract usage from result.usage (which may be a Promise)
@@ -1788,7 +1793,7 @@ async function traceStreamText(
                   runId: "run1",
                   hypothesisId: "B",
                 }),
-              }
+              },
             ).catch(() => {});
             // #endregion
             const responseMessages =
@@ -1817,7 +1822,7 @@ async function traceStreamText(
               toolsWrapped,
               toolCallBuffer,
               traceIdForRequest,
-              preCallTools
+              preCallTools,
             );
 
             // #region agent log
@@ -1840,7 +1845,7 @@ async function traceStreamText(
                   runId: "run1",
                   hypothesisId: "J",
                 }),
-              }
+              },
             ).catch(() => {});
             // #endregion
 
@@ -1855,7 +1860,7 @@ async function traceStreamText(
                     ? extractModelIdentifier(result.model)
                     : modelIdentifier,
                 },
-                options
+                options,
               );
               attachResultMetadata(wrappedResult, traceInfo);
             }
@@ -1879,9 +1884,9 @@ async function traceStreamText(
               traceStarted,
               toolCallBuffer,
               traceIdForRequest,
-              preCallTools
+              preCallTools,
             ),
-          () => toolCallBuffer.length > 0
+          () => toolCallBuffer.length > 0,
         );
 
         // Return result with wrapped stream - preserve all original properties and methods
@@ -1926,7 +1931,7 @@ async function traceStreamText(
                 traceStarted,
                 toolCallBuffer,
                 traceIdForRequest,
-                preCallTools
+                preCallTools,
               );
               throw error; // Re-throw so user sees the error
             }
@@ -1959,7 +1964,7 @@ async function traceStreamText(
                 traceStarted,
                 toolCallBuffer,
                 traceIdForRequest,
-                preCallTools
+                preCallTools,
               );
               throw error; // Re-throw so user sees the error
             }
@@ -1972,7 +1977,7 @@ async function traceStreamText(
       // we can't wrap it, so we can't get the streamed data
       // Log a warning but don't try to record trace (we don't have the data)
       console.warn(
-        "[Observa] streamText result.textStream is not a ReadableStream - cannot track stream data"
+        "[Observa] streamText result.textStream is not a ReadableStream - cannot track stream data",
       );
     }
 
@@ -1980,7 +1985,7 @@ async function traceStreamText(
     // Don't call recordTrace because we can't get the data without the stream
     if (!result.textStream) {
       console.warn(
-        "[Observa] streamText result has no textStream property - cannot track"
+        "[Observa] streamText result has no textStream property - cannot track",
       );
     }
 
@@ -2013,7 +2018,7 @@ async function traceStreamText(
         toolsWrapped,
         toolCallBuffer,
         traceIdForRequest,
-        preCallTools
+        preCallTools,
       );
 
       if (traceInfo) {
@@ -2027,7 +2032,7 @@ async function traceStreamText(
               ? extractModelIdentifier(result.model)
               : modelIdentifier,
           },
-          options
+          options,
         );
         attachResultMetadata(result, traceInfo);
       }
@@ -2052,7 +2057,7 @@ async function traceStreamText(
       traceStarted,
       toolCallBuffer,
       traceIdForRequest,
-      preCallTools
+      preCallTools,
     );
     throw error;
   }
@@ -2073,7 +2078,8 @@ function recordTrace(
   toolsWrapped?: boolean,
   toolCallBuffer?: ToolCallInfo[],
   explicitTraceId?: string | null,
-  preCallTools?: any
+  preCallTools?: any,
+  operationName?: string,
 ): {
   traceId: string | null;
   spanId: string;
@@ -2129,13 +2135,13 @@ function recordTrace(
             runId: "run1",
             hypothesisId: "E",
           }),
-        }
+        },
       ).catch(() => {});
       // #endregion
       console.error(
         "[Observa] ⚠️ CRITICAL: observa instance not provided to observeVercelAI(). " +
           "Tracking is disabled. Make sure you're using observa.observeVercelAI() " +
-          "instead of importing observeVercelAI directly from 'observa-sdk/instrumentation'."
+          "instead of importing observeVercelAI directly from 'observa-sdk/instrumentation'.",
       );
       return null; // Silently fail (don't crash user's app)
     }
@@ -2143,13 +2149,13 @@ function recordTrace(
     const trackedModel = resolveModelForTracking(
       sanitizedReq.model,
       sanitizedRes.model,
-      req?.model
+      req?.model,
     );
     const trackedResponseModel = resolveModelForTracking(
       sanitizedRes.model,
       sanitizedReq.model,
       res?.model,
-      trackedModel
+      trackedModel,
     );
     // #region agent log
     fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
@@ -2176,59 +2182,69 @@ function recordTrace(
 
     // Extract additional metadata from request (matching Langfuse's OTEL attributes)
     // Helper function to extract metadata from request
-    const extractRequestMetadata = (req: any, trackedModel: string, provider?: string): Record<string, any> => {
+    const extractRequestMetadata = (
+      req: any,
+      trackedModel: string,
+      provider?: string,
+    ): Record<string, any> => {
       const metadata: Record<string, any> = {};
-      
+
       // Tools schema (if available)
       if (req.tools) {
         const toolDefinitions = normalizeToolDefinitions(req.tools);
         if (toolDefinitions && toolDefinitions.length > 0) {
           metadata.tools = toolDefinitions;
-          metadata['ai.prompt.tools'] = toolDefinitions;
+          metadata["ai.prompt.tools"] = toolDefinitions;
         }
       }
-      
+
       // Tool choice
       if (req.toolChoice !== undefined) {
-        metadata['ai.prompt.toolChoice'] = req.toolChoice;
+        metadata["ai.prompt.toolChoice"] = req.toolChoice;
         metadata.toolChoice = req.toolChoice;
       }
 
       if (req.experimental_activeTools !== undefined) {
-        metadata['ai.prompt.active_tools'] = req.experimental_activeTools;
+        metadata["ai.prompt.active_tools"] = req.experimental_activeTools;
         metadata.activeTools = req.experimental_activeTools;
       }
-      
+
       // Settings (maxRetries, etc.)
       if (req.maxRetries !== undefined) {
-        metadata['ai.settings.maxRetries'] = String(req.maxRetries);
+        metadata["ai.settings.maxRetries"] = String(req.maxRetries);
       }
       if (req.retry !== undefined) {
-        metadata['ai.settings.retry'] = req.retry;
+        metadata["ai.settings.retry"] = req.retry;
       }
-      
+
       // Additional request parameters
       if (req.topK !== undefined) metadata.topK = req.topK;
       if (req.topP !== undefined) metadata.topP = req.topP;
-      if (req.frequencyPenalty !== undefined) metadata.frequencyPenalty = req.frequencyPenalty;
-      if (req.presencePenalty !== undefined) metadata.presencePenalty = req.presencePenalty;
+      if (req.frequencyPenalty !== undefined)
+        metadata.frequencyPenalty = req.frequencyPenalty;
+      if (req.presencePenalty !== undefined)
+        metadata.presencePenalty = req.presencePenalty;
       if (req.stop !== undefined) metadata.stop = req.stop;
       if (req.seed !== undefined) metadata.seed = req.seed;
-      
+
       // System/gen_ai attributes (matching OTEL format)
-      metadata['gen_ai.system'] = provider || "vercel-ai";
-      metadata['gen_ai.request.model'] = trackedModel;
-      
+      metadata["gen_ai.system"] = provider || "vercel-ai";
+      metadata["gen_ai.request.model"] = trackedModel;
+
       // Operation attributes
-      metadata['operation.name'] = "ai.streamText.doStream";
-      metadata['ai.operationId'] = "ai.streamText.doStream";
-      metadata['ai.model.provider'] = provider || "vercel-ai";
-      metadata['ai.model.id'] = trackedModel;
-      
+      metadata["operation.name"] = "ai.streamText.doStream";
+      metadata["ai.operationId"] = "ai.streamText.doStream";
+      metadata["ai.model.provider"] = provider || "vercel-ai";
+      metadata["ai.model.id"] = trackedModel;
+
       return metadata;
     };
 
-    const requestMetadata = extractRequestMetadata(sanitizedReq, trackedModel, provider);
+    const requestMetadata = extractRequestMetadata(
+      sanitizedReq,
+      trackedModel,
+      provider,
+    );
 
     // Extract input text from prompt or messages
     let inputText: string | null = null;
@@ -2274,13 +2290,13 @@ function recordTrace(
       allMessages.length > 0
         ? extractNewMessages(allMessages)
         : sanitizedReq.prompt
-        ? [
-            {
-              role: "user",
-              content: sanitizedReq.prompt,
-            },
-          ]
-        : null;
+          ? [
+              {
+                role: "user",
+                content: sanitizedReq.prompt,
+              },
+            ]
+          : null;
 
     if (!inputText && inputMessages) {
       const lastUserMessage = [...inputMessages]
@@ -2348,13 +2364,16 @@ function recordTrace(
         if (!message) return false;
         if (message.role === "tool") return true;
         if (message.tool_call_id || message.toolCallId) return true;
-        if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+        if (
+          Array.isArray(message.tool_calls) &&
+          message.tool_calls.length > 0
+        ) {
           return true;
         }
         if (Array.isArray(message.content)) {
           return message.content.some(
             (item: any) =>
-              item?.type === "tool_call" || item?.type === "tool_result"
+              item?.type === "tool_call" || item?.type === "tool_result",
           );
         }
         return false;
@@ -2413,11 +2432,18 @@ function recordTrace(
           ? opts.observa.getCurrentTraceId()
           : null);
       // Extract metadata for error case too
-      const errorMetadata = extractRequestMetadata(sanitizedReq, trackedModel, provider);
+      const errorMetadata = extractRequestMetadata(
+        sanitizedReq,
+        trackedModel,
+        provider,
+      );
       const requestForNormalization = sanitizedReq?.messages
         ? {
             ...sanitizedReq,
-            messages: prependSystemMessage(sanitizedReq.messages, sanitizedReq.system),
+            messages: prependSystemMessage(
+              sanitizedReq.messages,
+              sanitizedReq.system,
+            ),
           }
         : sanitizedReq;
       const normalized = buildNormalizedLLMCall({
@@ -2457,7 +2483,7 @@ function recordTrace(
         streamingDurationMs: streamingDuration || null,
         finishReason: finishReason,
         responseId: sanitizedRes.responseId || sanitizedRes.id || null,
-        operationName: "generate_text",
+        operationName: operationName ?? "generate_text",
         providerName: provider || "vercel-ai",
         responseModel:
           trackedResponseModel !== "unknown" ? trackedResponseModel : null,
@@ -2465,8 +2491,10 @@ function recordTrace(
         maxTokens: sanitizedReq.maxTokens || sanitizedReq.max_tokens || null,
         systemInstructions: systemInstructions,
         traceId: errorTraceId,
-        metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : null,
-        toolDefinitions: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
+        metadata:
+          Object.keys(mergedMetadata).length > 0 ? mergedMetadata : null,
+        toolDefinitions:
+          normalized.toolDefinitions ?? errorMetadata.tools ?? null,
         tools: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
       });
 
@@ -2474,13 +2502,13 @@ function recordTrace(
       const errorType = shouldTreatEmptyAsError
         ? "empty_response"
         : finishReason === "content_filter"
-        ? "content_filtered"
-        : "response_truncated";
+          ? "content_filtered"
+          : "response_truncated";
       const errorMessage = shouldTreatEmptyAsError
         ? "AI returned empty response"
         : finishReason === "content_filter"
-        ? "AI response was filtered due to content policy"
-        : "AI response was truncated due to token limit";
+          ? "AI response was filtered due to content policy"
+          : "AI response was truncated due to token limit";
 
       opts.observa.trackError({
         errorType: errorType,
@@ -2499,8 +2527,8 @@ function recordTrace(
           finishReason === "content_filter"
             ? "validation_error"
             : finishReason === "length" || finishReason === "max_tokens"
-            ? "model_error"
-            : "unknown_error",
+              ? "model_error"
+              : "unknown_error",
         errorCode: shouldTreatEmptyAsError ? "empty_response" : finishReason,
       });
 
@@ -2520,7 +2548,7 @@ function recordTrace(
               runId: "run1",
               hypothesisId: "F",
             }),
-          }
+          },
         ).catch(() => {});
         // #endregion
         opts.observa.endTrace({ outcome: "error" }).catch(() => {});
@@ -2675,7 +2703,10 @@ function recordTrace(
     const requestForNormalization = sanitizedReq?.messages
       ? {
           ...sanitizedReq,
-          messages: prependSystemMessage(sanitizedReq.messages, sanitizedReq.system),
+          messages: prependSystemMessage(
+            sanitizedReq.messages,
+            sanitizedReq.system,
+          ),
         }
       : sanitizedReq;
     const normalized = buildNormalizedLLMCall({
@@ -2712,7 +2743,7 @@ function recordTrace(
       streamingDurationMs: streamingDuration || null,
       finishReason: finishReason,
       responseId: sanitizedRes.responseId || sanitizedRes.id || null,
-      operationName: "generate_text",
+      operationName: operationName ?? "generate_text",
       providerName: provider || "vercel-ai",
       responseModel:
         trackedResponseModel !== "unknown" ? trackedResponseModel : null,
@@ -2724,7 +2755,8 @@ function recordTrace(
       outputCost,
       traceId: resolvedTraceId,
       metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : null,
-      toolDefinitions: normalized.toolDefinitions ?? requestMetadata.tools ?? null,
+      toolDefinitions:
+        normalized.toolDefinitions ?? requestMetadata.tools ?? null,
       tools: normalized.toolDefinitions ?? requestMetadata.tools ?? null,
     });
 
@@ -2843,7 +2875,7 @@ function recordTrace(
             runId: "run1",
             hypothesisId: "F",
           }),
-        }
+        },
       ).catch(() => {});
       // #endregion
       opts.observa.endTrace({ outcome: "success" }).catch(() => {});
@@ -2883,7 +2915,7 @@ function recordError(
   traceStarted?: boolean,
   toolCallBuffer?: ToolCallInfo[],
   explicitTraceId?: string | null,
-  preCallTools?: any
+  preCallTools?: any,
 ) {
   const duration = Date.now() - start;
 
@@ -2896,7 +2928,7 @@ function recordError(
       console.error(
         "[Observa] ⚠️ CRITICAL: observa instance not provided to observeVercelAI(). " +
           "Error tracking is disabled. Make sure you're using observa.observeVercelAI() " +
-          "instead of importing observeVercelAI directly from 'observa-sdk/instrumentation'."
+          "instead of importing observeVercelAI directly from 'observa-sdk/instrumentation'.",
       );
       return; // Silently fail (don't crash user's app)
     }
@@ -2904,7 +2936,7 @@ function recordError(
     // Use pre-extracted model identifier if available, otherwise extract from request
     const trackedModel = resolveModelForTracking(
       sanitizedReq.model,
-      req?.model
+      req?.model,
     );
     // #region agent log
     fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
@@ -2967,55 +2999,61 @@ function recordError(
     const extractedError = extractProviderError(error, providerName);
 
     // Extract additional metadata from request (matching Langfuse's OTEL attributes)
-    const extractRequestMetadata = (req: any, trackedModel: string, provider?: string): Record<string, any> => {
+    const extractRequestMetadata = (
+      req: any,
+      trackedModel: string,
+      provider?: string,
+    ): Record<string, any> => {
       const metadata: Record<string, any> = {};
-      
+
       // Tools schema (if available)
       if (req.tools) {
         const toolDefinitions = normalizeToolDefinitions(req.tools);
         if (toolDefinitions && toolDefinitions.length > 0) {
           metadata.tools = toolDefinitions;
-          metadata['ai.prompt.tools'] = toolDefinitions;
+          metadata["ai.prompt.tools"] = toolDefinitions;
         }
       }
-      
+
       // Tool choice
       if (req.toolChoice !== undefined) {
-        metadata['ai.prompt.toolChoice'] = req.toolChoice;
+        metadata["ai.prompt.toolChoice"] = req.toolChoice;
         metadata.toolChoice = req.toolChoice;
       }
 
       if (req.experimental_activeTools !== undefined) {
-        metadata['ai.prompt.active_tools'] = req.experimental_activeTools;
+        metadata["ai.prompt.active_tools"] = req.experimental_activeTools;
         metadata.activeTools = req.experimental_activeTools;
       }
-      
+
       // Settings (maxRetries, etc.)
       if (req.maxRetries !== undefined) {
-        metadata['ai.settings.maxRetries'] = String(req.maxRetries);
+        metadata["ai.settings.maxRetries"] = String(req.maxRetries);
       }
       if (req.retry !== undefined) {
-        metadata['ai.settings.retry'] = req.retry;
+        metadata["ai.settings.retry"] = req.retry;
       }
-      
+
       // Additional request parameters
       if (req.topK !== undefined) metadata.topK = req.topK;
       if (req.topP !== undefined) metadata.topP = req.topP;
-      if (req.frequencyPenalty !== undefined) metadata.frequencyPenalty = req.frequencyPenalty;
-      if (req.presencePenalty !== undefined) metadata.presencePenalty = req.presencePenalty;
+      if (req.frequencyPenalty !== undefined)
+        metadata.frequencyPenalty = req.frequencyPenalty;
+      if (req.presencePenalty !== undefined)
+        metadata.presencePenalty = req.presencePenalty;
       if (req.stop !== undefined) metadata.stop = req.stop;
       if (req.seed !== undefined) metadata.seed = req.seed;
-      
+
       // System/gen_ai attributes (matching OTEL format)
-      metadata['gen_ai.system'] = provider || "vercel-ai";
-      metadata['gen_ai.request.model'] = trackedModel;
-      
+      metadata["gen_ai.system"] = provider || "vercel-ai";
+      metadata["gen_ai.request.model"] = trackedModel;
+
       // Operation attributes
-      metadata['operation.name'] = "ai.streamText.doStream";
-      metadata['ai.operationId'] = "ai.streamText.doStream";
-      metadata['ai.model.provider'] = provider || "vercel-ai";
-      metadata['ai.model.id'] = trackedModel;
-      
+      metadata["operation.name"] = "ai.streamText.doStream";
+      metadata["ai.operationId"] = "ai.streamText.doStream";
+      metadata["ai.model.provider"] = provider || "vercel-ai";
+      metadata["ai.model.id"] = trackedModel;
+
       return metadata;
     };
 
@@ -3027,11 +3065,18 @@ function recordError(
         ? opts.observa.getCurrentTraceId()
         : null);
     // Extract metadata for error case
-    const errorMetadata = extractRequestMetadata(sanitizedReq, trackedModel, providerName);
+    const errorMetadata = extractRequestMetadata(
+      sanitizedReq,
+      trackedModel,
+      providerName,
+    );
     const requestForNormalization = sanitizedReq?.messages
       ? {
           ...sanitizedReq,
-          messages: prependSystemMessage(sanitizedReq.messages, sanitizedReq.system),
+          messages: prependSystemMessage(
+            sanitizedReq.messages,
+            sanitizedReq.system,
+          ),
         }
       : sanitizedReq;
     const normalized = buildNormalizedLLMCall({
@@ -3067,7 +3112,8 @@ function recordError(
       systemInstructions: systemInstructions,
       traceId: errorTraceId,
       metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : null,
-      toolDefinitions: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
+      toolDefinitions:
+        normalized.toolDefinitions ?? errorMetadata.tools ?? null,
       tools: normalized.toolDefinitions ?? errorMetadata.tools ?? null,
     });
 
@@ -3121,7 +3167,7 @@ function recordError(
             runId: "run1",
             hypothesisId: "F",
           }),
-        }
+        },
       ).catch(() => {});
       // #endregion
       opts.observa.endTrace({ outcome: "error" }).catch(() => {});
@@ -3132,8 +3178,377 @@ function recordError(
   }
 }
 
+/** Trace a generateObject call (structured output) */
+async function traceGenerateObject(
+  originalFn: (...args: any[]) => Promise<any>,
+  args: any[],
+  options?: ObserveOptions,
+) {
+  const startTime = Date.now();
+  const requestParams =
+    typeof args[0] === "object" && args[0] !== null ? args[0] : {};
+  const model = requestParams.model || "unknown";
+  const provider = extractProviderFromModel(model);
+  const modelIdentifier = extractModelIdentifier(model);
+  let traceStarted = false;
+  let startedTraceId: string | null = null;
+  const hasActiveTraceFn =
+    typeof options?.observa?.hasActiveTrace === "function";
+  const hasActiveTrace = hasActiveTraceFn
+    ? options!.observa.hasActiveTrace()
+    : false;
+  const existingTraceId =
+    options?.observa?.getCurrentTraceId &&
+    typeof options.observa.getCurrentTraceId === "function"
+      ? options.observa.getCurrentTraceId()
+      : null;
+  if (hasActiveTraceFn && !hasActiveTrace) {
+    startedTraceId = options!.observa.startTrace({ name: options?.name });
+    traceStarted = true;
+  }
+  const traceIdForRequest = startedTraceId || existingTraceId;
+  let inputText: string | null = null;
+  if (requestParams.prompt) {
+    inputText =
+      typeof requestParams.prompt === "string"
+        ? requestParams.prompt
+        : safeJsonStringify(requestParams.prompt);
+  } else if (requestParams.messages) {
+    const normalized = normalizeMessages(requestParams.messages);
+    inputText = normalized
+      .map((m: any) => extractMessageText(m))
+      .filter(Boolean)
+      .join("\n");
+  }
+  try {
+    const result = await originalFn(...args);
+    const outputObj = result.object ?? result;
+    const outputText =
+      typeof outputObj === "string" ? outputObj : safeJsonStringify(outputObj);
+    const usage = await resolveUsageFromResult(result);
+    const responseModel = result.model
+      ? extractModelIdentifier(result.model)
+      : modelIdentifier;
+    const syntheticRes = {
+      text: outputText,
+      usage,
+      finishReason: result.finishReason ?? "stop",
+      responseId: result.response?.id ?? null,
+      model: responseModel,
+      messages: null,
+    };
+    const traceInfo = recordTrace(
+      requestParams,
+      syntheticRes,
+      startTime,
+      options,
+      null,
+      null,
+      provider,
+      traceStarted,
+      false,
+      [],
+      traceIdForRequest,
+      null,
+      "structured_output",
+    );
+    if (traceInfo && result) {
+      attachFeedbackHelpers(
+        result,
+        {
+          traceId: traceInfo.traceId,
+          spanId: traceInfo.spanId,
+          responseId: syntheticRes.responseId,
+          model: responseModel,
+        },
+        options,
+      );
+      attachResultMetadata(result, traceInfo);
+    }
+    return result;
+  } catch (error) {
+    recordError(
+      {
+        model: modelIdentifier,
+        prompt: requestParams.prompt ?? null,
+        messages: requestParams.messages ?? null,
+        temperature: requestParams.temperature ?? null,
+        maxTokens: requestParams.maxTokens ?? requestParams.max_tokens ?? null,
+      },
+      error as Error,
+      startTime,
+      options,
+      provider,
+      inputText ?? null,
+      null,
+      traceStarted,
+      [],
+      traceIdForRequest,
+      null,
+    );
+    throw error;
+  }
+}
+
+/** Trace a streamObject call (streaming structured output) */
+async function traceStreamObject(
+  originalFn: (...args: any[]) => Promise<any>,
+  args: any[],
+  options?: ObserveOptions,
+) {
+  const startTime = Date.now();
+  const requestParams =
+    typeof args[0] === "object" && args[0] !== null ? args[0] : {};
+  const model = requestParams.model || "unknown";
+  const provider = extractProviderFromModel(model);
+  const modelIdentifier = extractModelIdentifier(model);
+  let traceStarted = false;
+  let startedTraceId: string | null = null;
+  const hasActiveTraceFn =
+    typeof options?.observa?.hasActiveTrace === "function";
+  const hasActiveTrace = hasActiveTraceFn
+    ? options!.observa.hasActiveTrace()
+    : false;
+  const existingTraceId =
+    options?.observa?.getCurrentTraceId &&
+    typeof options.observa.getCurrentTraceId === "function"
+      ? options.observa.getCurrentTraceId()
+      : null;
+  if (hasActiveTraceFn && !hasActiveTrace) {
+    startedTraceId = options!.observa.startTrace({ name: options?.name });
+    traceStarted = true;
+  }
+  const traceIdForRequest = startedTraceId || existingTraceId;
+  let inputText: string | null = null;
+  if (requestParams.prompt) {
+    inputText =
+      typeof requestParams.prompt === "string"
+        ? requestParams.prompt
+        : safeJsonStringify(requestParams.prompt);
+  } else if (requestParams.messages) {
+    const normalized = normalizeMessages(requestParams.messages);
+    inputText = normalized
+      .map((m: any) => extractMessageText(m))
+      .filter(Boolean)
+      .join("\n");
+  }
+  try {
+    const result = await originalFn(...args);
+    const stream =
+      result.partialObjectStream ?? result.objectStream ?? result.stream;
+    if (stream && typeof stream[Symbol.asyncIterator] === "function") {
+      const collected: any[] = [];
+      const requestParamsCopy = requestParams;
+      const startTimeCopy = startTime;
+      const optionsCopy = options;
+      const providerCopy = provider;
+      const traceStartedCopy = traceStarted;
+      const traceIdForRequestCopy = traceIdForRequest;
+      result.partialObjectStream = (async function* () {
+        for await (const value of stream) {
+          collected.push(value);
+          yield value;
+        }
+        const lastValue =
+          collected.length > 0 ? collected[collected.length - 1] : null;
+        const outputText =
+          lastValue != null
+            ? typeof lastValue === "string"
+              ? lastValue
+              : safeJsonStringify(lastValue)
+            : "";
+        waitUntil(
+          (async () => {
+            try {
+              const usage = await resolveUsageFromResult(result);
+              const responseModel = result.model
+                ? extractModelIdentifier(result.model)
+                : modelIdentifier;
+              const syntheticRes = {
+                text: outputText,
+                usage,
+                finishReason: "stop",
+                responseId: null,
+                model: responseModel,
+                messages: null,
+              };
+              recordTrace(
+                requestParamsCopy,
+                syntheticRes,
+                startTimeCopy,
+                optionsCopy,
+                null,
+                null,
+                providerCopy,
+                traceStartedCopy,
+                false,
+                [],
+                traceIdForRequestCopy,
+                null,
+                "structured_output",
+              );
+            } catch (e) {
+              console.error("[Observa] streamObject trace callback error", e);
+            }
+          })(),
+        );
+      })();
+    }
+    return result;
+  } catch (error) {
+    recordError(
+      {
+        model: modelIdentifier,
+        prompt: requestParams.prompt ?? null,
+        messages: requestParams.messages ?? null,
+        temperature: requestParams.temperature ?? null,
+        maxTokens: requestParams.maxTokens ?? requestParams.max_tokens ?? null,
+      },
+      error as Error,
+      startTime,
+      options,
+      provider,
+      inputText ?? null,
+      null,
+      traceStarted,
+      [],
+      traceIdForRequest,
+      null,
+    );
+    throw error;
+  }
+}
+
+/** Trace an embed call (single embedding) */
+async function traceEmbed(
+  originalFn: (...args: any[]) => Promise<any>,
+  args: any[],
+  options?: ObserveOptions,
+) {
+  const startTime = Date.now();
+  const requestParams =
+    typeof args[0] === "object" && args[0] !== null ? args[0] : {};
+  const model = requestParams.model ?? "unknown";
+  const provider = extractProviderFromModel(model);
+  const modelIdentifier = extractModelIdentifier(model);
+  let traceStarted = false;
+  const hasActiveTraceFn =
+    typeof options?.observa?.hasActiveTrace === "function";
+  if (hasActiveTraceFn && !options!.observa.hasActiveTrace()) {
+    options!.observa.startTrace({ name: options?.name });
+    traceStarted = true;
+  }
+  try {
+    const result = await originalFn(...args);
+    const latencyMs = Date.now() - startTime;
+    const embedding = result.embedding ?? result;
+    const embeddingArray = Array.isArray(embedding)
+      ? embedding
+      : typeof embedding === "object" &&
+          embedding !== null &&
+          "embedding" in embedding
+        ? (embedding as any).embedding
+        : null;
+    if (
+      options?.observa?.trackEmbedding &&
+      embeddingArray &&
+      Array.isArray(embeddingArray)
+    ) {
+      options.observa.trackEmbedding({
+        model: modelIdentifier,
+        dimensionCount: embeddingArray.length,
+        latencyMs,
+        providerName: provider,
+        embeddings: [embeddingArray],
+        inputText:
+          typeof requestParams.input === "string"
+            ? requestParams.input
+            : Array.isArray(requestParams.input)
+              ? requestParams.input.join("\n")
+              : null,
+      });
+    }
+    if (traceStarted && options?.observa?.endTrace)
+      options.observa.endTrace({ outcome: "success" }).catch(() => {});
+    return result;
+  } catch (error) {
+    if (options?.observa?.trackError) {
+      options.observa.trackError({
+        errorType: (error as Error).name ?? "Error",
+        errorMessage: (error as Error).message,
+        stackTrace: (error as Error).stack ?? null,
+        errorCategory: "embedding_error",
+        errorCode: "embedding_failed",
+      });
+    }
+    if (traceStarted && options?.observa?.endTrace)
+      options.observa.endTrace({ outcome: "error" }).catch(() => {});
+    throw error;
+  }
+}
+
+/** Trace an embedMany call (batch embeddings) */
+async function traceEmbedMany(
+  originalFn: (...args: any[]) => Promise<any>,
+  args: any[],
+  options?: ObserveOptions,
+) {
+  const startTime = Date.now();
+  const requestParams =
+    typeof args[0] === "object" && args[0] !== null ? args[0] : {};
+  const model = requestParams.model ?? "unknown";
+  const provider = extractProviderFromModel(model);
+  const modelIdentifier = extractModelIdentifier(model);
+  let traceStarted = false;
+  const hasActiveTraceFn =
+    typeof options?.observa?.hasActiveTrace === "function";
+  if (hasActiveTraceFn && !options!.observa.hasActiveTrace()) {
+    options!.observa.startTrace({ name: options?.name });
+    traceStarted = true;
+  }
+  try {
+    const result = await originalFn(...args);
+    const latencyMs = Date.now() - startTime;
+    const embeddings =
+      result.embeddings ?? (result.embedding ? [result.embedding] : []);
+    const arr = Array.isArray(embeddings) ? embeddings : [];
+    if (options?.observa?.trackEmbedding && arr.length > 0) {
+      const first = arr[0];
+      const dimensionCount = Array.isArray(first) ? first.length : 0;
+      options.observa.trackEmbedding({
+        model: modelIdentifier,
+        dimensionCount: dimensionCount || null,
+        latencyMs,
+        providerName: provider,
+        embeddings: arr,
+        inputText: Array.isArray(requestParams.input)
+          ? requestParams.input.join("\n")
+          : typeof requestParams.input === "string"
+            ? requestParams.input
+            : null,
+      });
+    }
+    if (traceStarted && options?.observa?.endTrace)
+      options.observa.endTrace({ outcome: "success" }).catch(() => {});
+    return result;
+  } catch (error) {
+    if (options?.observa?.trackError) {
+      options.observa.trackError({
+        errorType: (error as Error).name ?? "Error",
+        errorMessage: (error as Error).message,
+        stackTrace: (error as Error).stack ?? null,
+        errorCategory: "embedding_error",
+        errorCode: "embedding_failed",
+      });
+    }
+    if (traceStarted && options?.observa?.endTrace)
+      options.observa.endTrace({ outcome: "error" }).catch(() => {});
+    throw error;
+  }
+}
+
 /**
- * Observe Vercel AI SDK - wraps generateText and streamText functions
+ * Observe Vercel AI SDK - wraps generateText, streamText, generateObject, streamObject, embed, embedMany
  *
  * @param aiSdk - Vercel AI SDK module (imported from 'ai')
  * @param options - Observation options (name, tags, userId, sessionId, redact)
@@ -3162,7 +3577,7 @@ export function observeVercelAI(
     streamText?: StreamTextFn;
     [key: string]: any;
   },
-  options?: ObserveOptions
+  options?: ObserveOptions,
 ): {
   generateText?: GenerateTextFn;
   streamText?: StreamTextFn;
@@ -3184,7 +3599,7 @@ export function observeVercelAI(
           "✅ CORRECT (using instance method):\n" +
           "  import { init } from 'observa-sdk';\n" +
           "  const observa = init({ apiKey: '...' });\n" +
-          "  const ai = observa.observeVercelAI({ generateText, streamText });\n"
+          "  const ai = observa.observeVercelAI({ generateText, streamText });\n",
       );
     }
 
@@ -3193,14 +3608,54 @@ export function observeVercelAI(
     // Wrap generateText if available
     if (aiSdk.generateText && typeof aiSdk.generateText === "function") {
       wrapped.generateText = async function (...args: any[]) {
-        return traceGenerateText(aiSdk.generateText.bind(aiSdk), args, options);
+        return traceGenerateText(
+          aiSdk.generateText!.bind(aiSdk),
+          args,
+          options,
+        );
       };
     }
 
     // Wrap streamText if available
     if (aiSdk.streamText && typeof aiSdk.streamText === "function") {
       wrapped.streamText = async function (...args: any[]) {
-        return traceStreamText(aiSdk.streamText.bind(aiSdk), args, options);
+        return traceStreamText(aiSdk.streamText!.bind(aiSdk), args, options);
+      };
+    }
+
+    // Wrap generateObject if available
+    if (aiSdk.generateObject && typeof aiSdk.generateObject === "function") {
+      wrapped.generateObject = async function (...args: any[]) {
+        return traceGenerateObject(
+          aiSdk.generateObject!.bind(aiSdk),
+          args,
+          options,
+        );
+      };
+    }
+
+    // Wrap streamObject if available
+    if (aiSdk.streamObject && typeof aiSdk.streamObject === "function") {
+      wrapped.streamObject = async function (...args: any[]) {
+        return traceStreamObject(
+          aiSdk.streamObject!.bind(aiSdk),
+          args,
+          options,
+        );
+      };
+    }
+
+    // Wrap embed if available
+    if (aiSdk.embed && typeof aiSdk.embed === "function") {
+      wrapped.embed = async function (...args: any[]) {
+        return traceEmbed(aiSdk.embed!.bind(aiSdk), args, options);
+      };
+    }
+
+    // Wrap embedMany if available
+    if (aiSdk.embedMany && typeof aiSdk.embedMany === "function") {
+      wrapped.embedMany = async function (...args: any[]) {
+        return traceEmbedMany(aiSdk.embedMany!.bind(aiSdk), args, options);
       };
     }
 

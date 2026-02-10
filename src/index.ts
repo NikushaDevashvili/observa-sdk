@@ -201,7 +201,10 @@ type EventType =
   | "embedding"
   | "vector_db_operation"
   | "cache_operation"
-  | "agent_create";
+  | "agent_create"
+  | "guardrail"
+  | "reasoning_step"
+  | "prompt_template";
 
 interface CanonicalEvent {
   tenant_id: string;
@@ -2148,33 +2151,6 @@ export class Observa {
       | null;
   }): string {
     const spanId = crypto.randomUUID();
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/58308b77-6db1-45c3-a89e-548ba2d1edd2", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "index.ts:trackLLMCall",
-        message: "trackLLMCall inputs",
-        data: {
-          model: options.model,
-          providerName: options.providerName ?? null,
-          hasOutput:
-            typeof options.output === "string"
-              ? options.output.length > 0
-              : options.output !== null,
-          inputLength:
-            typeof options.input === "string" ? options.input.length : 0,
-          currentTraceId: this.currentTraceId,
-          spanStackDepth: this.spanStack.length,
-          traceId: options.traceId ?? null,
-        },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "run1",
-        hypothesisId: "D",
-      }),
-    }).catch(() => {});
-    // #endregion
 
     // Auto-infer provider from model if not provided
     let providerName = options.providerName;
@@ -2816,6 +2792,134 @@ export class Observa {
       },
     });
 
+    return spanId;
+  }
+
+  /**
+   * Track a guardrail/safety/moderation check
+   */
+  trackGuardrail(options: {
+    input?: string | null;
+    output?: string | null;
+    latencyMs: number;
+    operationName?: string | null;
+    providerName?: string | null;
+    flagged?: boolean | null;
+    categories?: Record<string, boolean> | null;
+    metadata?: Record<string, any> | null;
+  }): string {
+    const spanId = crypto.randomUUID();
+    this.addEvent({
+      event_type: "guardrail",
+      span_id: spanId,
+      attributes: {
+        guardrail: {
+          input: options.input ?? null,
+          output: options.output ?? null,
+          latency_ms: options.latencyMs,
+          operation_name: options.operationName ?? "guardrail",
+          provider_name: options.providerName ?? null,
+          flagged: options.flagged ?? null,
+          categories: options.categories ?? null,
+          ...(options.metadata ? { metadata: options.metadata } : {}),
+        },
+      },
+    });
+    return spanId;
+  }
+
+  /**
+   * Track a reasoning step (chain-of-thought, extended thinking)
+   */
+  trackReasoningStep(options: {
+    stepIndex?: number | null;
+    content: string;
+    model?: string | null;
+    latencyMs?: number | null;
+    parentSpanId?: string | null;
+  }): string {
+    const spanId = crypto.randomUUID();
+    this.addEvent({
+      ...(options.parentSpanId ? { parent_span_id: options.parentSpanId } : {}),
+      event_type: "reasoning_step",
+      span_id: spanId,
+      attributes: {
+        reasoning_step: {
+          step_index: options.stepIndex ?? null,
+          content: options.content,
+          model: options.model ?? null,
+          latency_ms: options.latencyMs ?? null,
+        },
+      },
+    });
+    return spanId;
+  }
+
+  /**
+   * Track prompt template usage (version and template id for reproducibility)
+   */
+  trackPromptTemplate(options: {
+    templateId: string;
+    version?: string | null;
+    name?: string | null;
+    variables?: Record<string, any> | null;
+    parentSpanId?: string | null;
+  }): string {
+    const spanId = crypto.randomUUID();
+    this.addEvent({
+      ...(options.parentSpanId ? { parent_span_id: options.parentSpanId } : {}),
+      event_type: "prompt_template",
+      span_id: spanId,
+      attributes: {
+        prompt_template: {
+          template_id: options.templateId,
+          version: options.version ?? null,
+          name: options.name ?? null,
+          variables: options.variables ?? null,
+        },
+      },
+    });
+    return spanId;
+  }
+
+  /**
+   * Track a generic LLM request (custom/self-hosted endpoints) with HTTP metadata
+   */
+  trackGenericLLMRequest(options: {
+    model?: string | null;
+    input?: string | null;
+    output?: string | null;
+    latencyMs: number;
+    requestUrl?: string | null;
+    responseStatusCode?: number | null;
+    providerName?: string | null;
+    errorMessage?: string | null;
+    metadata?: Record<string, any> | null;
+  }): string {
+    const spanId = crypto.randomUUID();
+    const meta = options.metadata ?? {};
+    if (options.requestUrl != null)
+      (meta as any).http_request_url = options.requestUrl;
+    if (options.responseStatusCode != null)
+      (meta as any).http_response_status_code = options.responseStatusCode;
+    this.addEvent({
+      event_type: "llm_call",
+      span_id: spanId,
+      attributes: {
+        llm_call: {
+          model: options.model ?? "unknown",
+          input: options.input ?? null,
+          output: options.output ?? null,
+          latency_ms: options.latencyMs,
+          operation_name: "generic",
+          provider_name: options.providerName ?? null,
+          ...(Object.keys(meta).length > 0 ? { metadata: meta } : {}),
+        },
+        ...(options.errorMessage
+          ? { error_message: options.errorMessage }
+          : {}),
+      },
+    });
     return spanId;
   }
 

@@ -1,0 +1,19 @@
+DESCRIPTION >
+  Materialized pipe: aggregates latency percentiles by day and model from canonical_events (llm_call). Query with quantileMerge(0.5)(latency_p50), quantileMerge(0.95)(latency_p95).
+
+NODE latency_daily_node
+SQL >
+SELECT
+  toDate(timestamp) as date,
+  tenant_id,
+  project_id,
+  ifNull(JSONExtractString(attributes_json, '$.llm_call.model'), '') as model,
+  quantileState(0.5)(toFloat64OrNull(JSONExtractString(attributes_json, '$.llm_call.latency_ms'))) as latency_p50,
+  quantileState(0.95)(toFloat64OrNull(JSONExtractString(attributes_json, '$.llm_call.latency_ms'))) as latency_p95,
+  countState(1) as event_count
+FROM canonical_events
+WHERE event_type = 'llm_call'
+GROUP BY date, tenant_id, project_id, model
+
+TYPE MATERIALIZED
+DATASOURCE latency_daily_by_model

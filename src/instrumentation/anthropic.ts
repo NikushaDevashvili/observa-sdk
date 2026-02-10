@@ -20,7 +20,6 @@ type Anthropic = any;
 // WeakMap Cache for Memoization (CRITICAL for object identity)
 const proxyCache = new WeakMap<object, any>();
 
-
 export interface ObserveOptions {
   name?: string;
   tags?: string[];
@@ -56,7 +55,7 @@ export interface ObserveOptions {
  */
 export function observeAnthropic(
   client: Anthropic,
-  options?: ObserveOptions
+  options?: ObserveOptions,
 ): Anthropic {
   // Return cached proxy if exists to maintain identity (client === client)
   if (proxyCache.has(client)) {
@@ -78,7 +77,7 @@ export function observeAnthropic(
         "✅ CORRECT (using instance method):\n" +
         "  import { init } from 'observa-sdk';\n" +
         "  const observa = init({ apiKey: '...' });\n" +
-        "  const wrapped = observa.observeAnthropic(anthropic);\n"
+        "  const wrapped = observa.observeAnthropic(anthropic);\n",
     );
   }
 
@@ -126,7 +125,7 @@ export function observeAnthropic(
 async function traceAnthropicCall(
   originalFn: Function,
   args: any[],
-  options?: ObserveOptions
+  options?: ObserveOptions,
 ) {
   const startTime = Date.now();
   const requestParams = args[0] || {};
@@ -169,7 +168,7 @@ async function traceAnthropicCall(
             options,
             fullResponse.timeToFirstToken,
             fullResponse.streamingDuration,
-            preCallTools
+            preCallTools,
           );
         },
         (err: any) =>
@@ -181,13 +180,21 @@ async function traceAnthropicCall(
             inputText,
             inputMessages,
             model,
-            preCallTools
+            preCallTools,
           ),
-        "anthropic"
+        "anthropic",
       );
     } else {
       // Standard await -> Send Trace to Observa
-      recordTrace(requestParams, result, startTime, options, undefined, undefined, preCallTools);
+      recordTrace(
+        requestParams,
+        result,
+        startTime,
+        options,
+        undefined,
+        undefined,
+        preCallTools,
+      );
       return result;
     }
   } catch (error) {
@@ -199,7 +206,7 @@ async function traceAnthropicCall(
       inputText,
       inputMessages,
       model,
-      preCallTools
+      preCallTools,
     );
     throw error; // Always re-throw user errors
   }
@@ -215,7 +222,7 @@ function recordTrace(
   opts?: ObserveOptions,
   timeToFirstToken?: number | null,
   streamingDuration?: number | null,
-  preCallTools?: any
+  preCallTools?: any,
 ) {
   const duration = Date.now() - start;
 
@@ -232,7 +239,7 @@ function recordTrace(
       console.error(
         "[Observa] ⚠️ CRITICAL: observa instance not provided to observeAnthropic(). " +
           "Tracking is disabled. Make sure you're using observa.observeAnthropic() " +
-          "instead of importing observeAnthropic directly from 'observa-sdk/instrumentation'."
+          "instead of importing observeAnthropic directly from 'observa-sdk/instrumentation'.",
       );
       return; // Silently fail (don't crash user's app)
     }
@@ -263,22 +270,77 @@ function recordTrace(
           .filter(Boolean)
           .join("\n") || null;
 
-      // Extract output text from response
+      // Extract output text from response (exclude thinking blocks for main output)
+      const contentBlocks = sanitizedRes?.content ?? [];
       const outputText =
-        sanitizedRes?.content
-          ?.map((c: any) => c.text)
+        contentBlocks
+          .filter((c: any) => c.type !== "thinking")
+          .map((c: any) => c.text)
           .filter(Boolean)
           .join("\n") || null;
-      
+
+      // Extract extended thinking blocks (Anthropic extended thinking / chain-of-thought)
+      const thinkingBlocks = contentBlocks
+        .filter((c: any) => c.type === "thinking")
+        .map(
+          (c: any) =>
+            c.thinking ??
+            c.text ??
+            (typeof c.content === "string" ? c.content : null),
+        )
+        .filter(Boolean);
+      const hasThinking = thinkingBlocks.length > 0;
+
+      // Extract tool_use blocks (including computer use) for metadata
+      const toolUseBlocks = contentBlocks
+        .filter((c: any) => c.type === "tool_use" || c.type === "tool use")
+        .map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          input: c.input,
+          type: c.type,
+        }));
+      const hasComputerUse = toolUseBlocks.some(
+        (t: any) =>
+          t.name === "computer" ||
+          t.name === "computer_use" ||
+          (t.name && String(t.name).toLowerCase().includes("computer")),
+      );
+
+      // Merge reasoning/computer-use into metadata for observability
+      const enrichedMetadata = {
+        ...otelMetadata,
+        ...(hasThinking
+          ? {
+              anthropic_thinking:
+                thinkingBlocks.length <= 5
+                  ? thinkingBlocks
+                  : thinkingBlocks.slice(0, 5).concat(["[truncated]"]),
+              reasoning_step_count: thinkingBlocks.length,
+            }
+          : {}),
+        ...(hasComputerUse || toolUseBlocks.length > 0
+          ? {
+              anthropic_tool_use_blocks:
+                toolUseBlocks.length <= 10
+                  ? toolUseBlocks
+                  : toolUseBlocks.slice(0, 10),
+            }
+          : {}),
+      };
+
       // Extract stop reason (Anthropic's equivalent of finish_reason)
       const stopReason = sanitizedRes?.stop_reason || null;
-      
+
       // CRITICAL FIX: Detect empty responses
-      const isEmptyResponse = !outputText || (typeof outputText === 'string' && outputText.trim().length === 0);
-      
+      const isEmptyResponse =
+        !outputText ||
+        (typeof outputText === "string" && outputText.trim().length === 0);
+
       // CRITICAL FIX: Detect failure stop reasons (Anthropic uses stop_sequence for content filter, max_tokens for length)
-      const isFailureStopReason = stopReason === 'stop_sequence' || stopReason === 'max_tokens';
-      
+      const isFailureStopReason =
+        stopReason === "stop_sequence" || stopReason === "max_tokens";
+
       // If response is empty or has failure stop reason, record as error
       if (isEmptyResponse || isFailureStopReason) {
         // Record LLM call with null output to show the attempt
@@ -304,17 +366,21 @@ function recordTrace(
           temperature: sanitizedReq.temperature || null,
           maxTokens: sanitizedReq.max_tokens || null,
           toolDefinitions,
-          metadata: otelMetadata,
+          metadata: enrichedMetadata,
         });
 
         // Record error event with appropriate error type
-        const errorType = isEmptyResponse ? "empty_response" : (stopReason === 'stop_sequence' ? "content_filtered" : "response_truncated");
-        const errorMessage = isEmptyResponse 
-          ? "AI returned empty response" 
-          : (stopReason === 'stop_sequence' 
-            ? "AI response was filtered due to content policy" 
-            : "AI response was truncated due to token limit");
-        
+        const errorType = isEmptyResponse
+          ? "empty_response"
+          : stopReason === "stop_sequence"
+            ? "content_filtered"
+            : "response_truncated";
+        const errorMessage = isEmptyResponse
+          ? "AI returned empty response"
+          : stopReason === "stop_sequence"
+            ? "AI response was filtered due to content policy"
+            : "AI response was truncated due to token limit";
+
         opts.observa.trackError({
           errorType: errorType,
           errorMessage: errorMessage,
@@ -328,15 +394,20 @@ function recordTrace(
             provider: "anthropic",
             duration_ms: duration,
           },
-          errorCategory: stopReason === 'stop_sequence' ? "validation_error" : (stopReason === 'max_tokens' ? "model_error" : "unknown_error"),
+          errorCategory:
+            stopReason === "stop_sequence"
+              ? "validation_error"
+              : stopReason === "max_tokens"
+                ? "model_error"
+                : "unknown_error",
           errorCode: isEmptyResponse ? "empty_response" : stopReason,
         });
-        
+
         // Don't record as successful trace
         return;
       }
 
-      // Normal successful response - continue with existing logic
+      // Normal successful response - include thinking blocks and tool_use in metadata
       opts.observa.trackLLMCall({
         model: sanitizedReq.model || sanitizedRes?.model || "unknown",
         input: inputText,
@@ -359,7 +430,7 @@ function recordTrace(
         temperature: sanitizedReq.temperature || null,
         maxTokens: sanitizedReq.max_tokens || null,
         toolDefinitions,
-        metadata: otelMetadata,
+        metadata: enrichedMetadata,
       });
     }
   } catch (e) {
@@ -380,7 +451,7 @@ function recordError(
   preExtractedInputText?: string | null,
   preExtractedInputMessages?: any,
   preExtractedModel?: string,
-  preCallTools?: any
+  preCallTools?: any,
 ) {
   const duration = Date.now() - start;
 
@@ -395,7 +466,7 @@ function recordError(
       console.error(
         "[Observa] ⚠️ CRITICAL: observa instance not provided to observeAnthropic(). " +
           "Error tracking is disabled. Make sure you're using observa.observeAnthropic() " +
-          "instead of importing observeAnthropic directly from 'observa-sdk/instrumentation'."
+          "instead of importing observeAnthropic directly from 'observa-sdk/instrumentation'.",
       );
       return; // Silently fail (don't crash user's app)
     }

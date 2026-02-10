@@ -1,0 +1,18 @@
+DESCRIPTION >
+  Materialized pipe: aggregates cost by day and model from canonical_events (llm_call events). Target: cost_daily_by_model. Query with sumMerge(total_cost), countMerge(event_count).
+
+NODE cost_daily_node
+SQL >
+SELECT
+  toDate(timestamp) as date,
+  tenant_id,
+  project_id,
+  ifNull(JSONExtractString(attributes_json, '$.llm_call.model'), '') as model,
+  sumState(toFloat64OrNull(JSONExtractString(attributes_json, '$.llm_call.cost'))) as total_cost,
+  countState(1) as event_count
+FROM canonical_events
+WHERE event_type = 'llm_call'
+GROUP BY date, tenant_id, project_id, model
+
+TYPE MATERIALIZED
+DATASOURCE cost_daily_by_model

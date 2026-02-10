@@ -1,0 +1,23 @@
+DESCRIPTION >
+  Canonical events datasource for Observa. Stores all event types (llm_call, tool_call, retrieval, error, feedback, output, trace_start, trace_end, embedding, vector_db_operation, cache_operation, agent_create, guardrail, reasoning_step, prompt_template) with a flexible attributes_json payload.
+
+SCHEMA >
+  `tenant_id` String `json:$.tenant_id`,
+  `project_id` String `json:$.project_id`,
+  `environment` Enum8('dev' = 1, 'prod' = 2) `json:$.environment`,
+  `trace_id` String `json:$.trace_id`,
+  `span_id` String `json:$.span_id`,
+  `parent_span_id` Nullable(String) `json:$.parent_span_id`,
+  `timestamp` DateTime64(3) `json:$.timestamp`,
+  `event_type` String `json:$.event_type`,
+  `conversation_id` String `json:$.conversation_id`,
+  `session_id` String `json:$.session_id`,
+  `user_id` String `json:$.user_id`,
+  `agent_name` Nullable(String) `json:$.agent_name`,
+  `version` Nullable(String) `json:$.version`,
+  `route` Nullable(String) `json:$.route`,
+  `attributes_json` String `json:$.attributes_json`
+
+ENGINE "MergeTree"
+ENGINE_PARTITION_KEY "toYYYYMM(timestamp)"
+ENGINE_SORTING_KEY "tenant_id, project_id, timestamp, trace_id, span_id"

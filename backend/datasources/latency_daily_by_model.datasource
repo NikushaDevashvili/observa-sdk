@@ -1,0 +1,15 @@
+DESCRIPTION >
+  Pre-aggregated latency percentiles by day and model. Target for latency_daily_by_model pipe. Query with quantileMerge(0.5)(latency_p50), quantileMerge(0.95)(latency_p95).
+
+SCHEMA >
+  `date` Date `json:$.date`,
+  `tenant_id` String `json:$.tenant_id`,
+  `project_id` String `json:$.project_id`,
+  `model` String `json:$.model`,
+  `latency_p50` AggregateFunction(quantile(0.5), Float64) `json:$.latency_p50`,
+  `latency_p95` AggregateFunction(quantile(0.95), Float64) `json:$.latency_p95`,
+  `event_count` AggregateFunction(count, UInt64) `json:$.event_count`
+
+ENGINE "AggregatingMergeTree"
+ENGINE_PARTITION_KEY "toYYYYMM(date)"
+ENGINE_SORTING_KEY "tenant_id, project_id, date, model"

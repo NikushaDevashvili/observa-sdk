@@ -106,18 +106,19 @@ export interface ObserveOptions {
  * await wrapped.responses.create({ model: 'gpt-4o', input: 'Hello!' });
  * ```
  */
-export function observeOpenAI(
+/** Path from root client to current node (e.g. ["chat", "completions"] or ["embeddings"]) */
+function observeOpenAIInternal(
   client: OpenAI,
   options?: ObserveOptions,
+  path: string[] = [],
 ): OpenAI {
-  // Return cached proxy if exists to maintain identity (client === client)
-  if (proxyCache.has(client)) {
+  // At root only: return cached proxy if exists to maintain identity (client === client)
+  if (path.length === 0 && proxyCache.has(client)) {
     return proxyCache.get(client);
   }
 
-  // CRITICAL: Warn if observa instance is not provided
-  // This is the most common mistake - users importing observeOpenAI directly
-  if (!options?.observa) {
+  // CRITICAL: Warn if observa instance is not provided (root only)
+  if (path.length === 0 && !options?.observa) {
     console.error(
       "[Observa] ⚠️ CRITICAL ERROR: observa instance not provided!\n" +
         "\n" +
@@ -138,23 +139,55 @@ export function observeOpenAI(
     const wrapped = new Proxy(client, {
       get(target, prop, receiver) {
         const value = Reflect.get(target, prop, receiver);
+        const nextPath = [
+          ...path,
+          typeof prop === "string" ? prop : String(prop),
+        ];
 
         // Recursive wrapping for nested objects (like client.chat.completions)
         if (typeof value === "object" && value !== null) {
-          // Don't wrap internal prototypes
           if (prop === "prototype" || prop === "constructor") {
             return value;
           }
-
-          // Recursive wrap with same options (memoized via proxyCache)
-          return observeOpenAI(value as any, options);
+          return observeOpenAIInternal(value as any, options, nextPath);
         }
 
-        // Intercept the specific function call: chat.completions.create
-        if (typeof value === "function" && prop === "create") {
-          // We assume we are at the leaf node (completions.create)
+        // Intercept .create (and .generate for images) at leaf nodes and route by path
+        const isCreate =
+          typeof value === "function" &&
+          (prop === "create" || prop === "generate");
+        if (isCreate) {
+          const pathKey = nextPath.join(".");
           return async function (...args: any[]) {
-            return traceOpenAICall(value.bind(target), args, options);
+            if (
+              pathKey === "chat.completions.create" ||
+              pathKey === "responses.create"
+            ) {
+              return traceOpenAICall(value.bind(target), args, options);
+            }
+            if (pathKey === "embeddings.create") {
+              return traceEmbeddingsCall(value.bind(target), args, options);
+            }
+            if (pathKey === "images.create" || pathKey === "images.generate") {
+              return traceImagesCall(value.bind(target), args, options);
+            }
+            if (
+              pathKey === "audio.transcriptions.create" ||
+              pathKey === "audio.translations.create"
+            ) {
+              return traceAudioCall(
+                value.bind(target),
+                args,
+                options,
+                pathKey === "audio.translations.create"
+                  ? "translation"
+                  : "transcription",
+              );
+            }
+            if (pathKey === "moderations.create") {
+              return traceModerationsCall(value.bind(target), args, options);
+            }
+            return value.apply(target, args);
           };
         }
 
@@ -162,14 +195,21 @@ export function observeOpenAI(
       },
     });
 
-    // Cache the proxy to preserve object identity
-    proxyCache.set(client, wrapped);
+    if (path.length === 0) {
+      proxyCache.set(client, wrapped);
+    }
     return wrapped;
   } catch (error) {
-    // Fail gracefully - never crash user's app
     console.error("[Observa] Failed to wrap OpenAI client:", error);
-    return client; // Return unwrapped client - user code still works
+    return client;
   }
+}
+
+export function observeOpenAI(
+  client: OpenAI,
+  options?: ObserveOptions,
+): OpenAI {
+  return observeOpenAIInternal(client, options, []);
 }
 
 /**
@@ -440,6 +480,215 @@ function recordTrace(
   } catch (e) {
     // Never crash user's app
     console.error("[Observa] Failed to record trace", e);
+  }
+}
+
+/** Trace OpenAI embeddings.create() */
+async function traceEmbeddingsCall(
+  originalFn: Function,
+  args: any[],
+  options?: ObserveOptions,
+) {
+  const startTime = Date.now();
+  const req = args[0] || {};
+  const model = req.model || "unknown";
+  const input = req.input;
+  const inputText =
+    typeof input === "string"
+      ? input
+      : Array.isArray(input)
+        ? input.join("\n")
+        : null;
+  try {
+    const result = await originalFn(...args);
+    const duration = Date.now() - startTime;
+    const data = result?.data ?? result?.embeddings ?? [];
+    const first = Array.isArray(data) ? data[0] : data;
+    const embedding = first?.embedding ?? first;
+    const embeddings = Array.isArray(embedding)
+      ? [embedding]
+      : Array.isArray(data)
+        ? data.map((d: any) => d?.embedding ?? d).filter(Boolean)
+        : [];
+    const usage = result?.usage;
+    const inputTokens = usage?.prompt_tokens ?? usage?.input_tokens ?? null;
+    if (options?.observa?.trackEmbedding) {
+      options.observa.trackEmbedding({
+        model,
+        dimensionCount: Array.isArray(embedding) ? embedding.length : null,
+        latencyMs: duration,
+        providerName: "openai",
+        inputText: inputText ?? null,
+        inputTokens: inputTokens ?? null,
+        embeddings: embeddings.length > 0 ? embeddings : null,
+      });
+    }
+    return result;
+  } catch (error) {
+    if (options?.observa?.trackError) {
+      options.observa.trackError({
+        errorType: (error as Error)?.name ?? "Error",
+        errorMessage: (error as Error)?.message ?? "Embedding failed",
+        stackTrace: (error as Error)?.stack ?? null,
+        errorCategory: "embedding_error",
+        errorCode: "embedding_failed",
+      });
+    }
+    throw error;
+  }
+}
+
+/** Trace OpenAI images.generate() - tracked as LLM-style call with operation_name image_generation */
+async function traceImagesCall(
+  originalFn: Function,
+  args: any[],
+  options?: ObserveOptions,
+) {
+  const startTime = Date.now();
+  const req = args[0] || {};
+  const model = req.model || "unknown";
+  const prompt =
+    typeof req.prompt === "string"
+      ? req.prompt
+      : (req.prompt?.[0]?.text ?? null);
+  try {
+    const result = await originalFn(...args);
+    const duration = Date.now() - startTime;
+    const data = result?.data ?? [];
+    const first = Array.isArray(data) ? data[0] : result;
+    const output =
+      first?.url ??
+      first?.b64_json ??
+      (typeof first === "string" ? first : null);
+    const outputText =
+      output != null
+        ? typeof output === "string" && output.length < 500
+          ? output
+          : "[image data]"
+        : null;
+    if (options?.observa?.trackLLMCall) {
+      options.observa.trackLLMCall({
+        model,
+        input: prompt,
+        output: outputText,
+        latencyMs: duration,
+        operationName: "image_generation",
+        providerName: "openai",
+      });
+    }
+    return result;
+  } catch (error) {
+    if (options?.observa?.trackError) {
+      options.observa.trackError({
+        errorType: (error as Error)?.name ?? "Error",
+        errorMessage: (error as Error)?.message ?? "Image generation failed",
+        stackTrace: (error as Error)?.stack ?? null,
+        errorCategory: "model_error",
+        errorCode: "image_generation_failed",
+      });
+    }
+    throw error;
+  }
+}
+
+/** Trace OpenAI audio.transcriptions.create() / audio.translations.create() */
+async function traceAudioCall(
+  originalFn: Function,
+  args: any[],
+  options?: ObserveOptions,
+  kind: "transcription" | "translation" = "transcription",
+) {
+  const startTime = Date.now();
+  const req = args[0] || {};
+  const model = req.model ?? "whisper-1";
+  const file = req.file;
+  const inputHint = file ? "[audio file]" : null;
+  try {
+    const result = await originalFn(...args);
+    const duration = Date.now() - startTime;
+    const outputText = result?.text ?? result?.data ?? null;
+    if (options?.observa?.trackLLMCall) {
+      options.observa.trackLLMCall({
+        model,
+        input: inputHint,
+        output: typeof outputText === "string" ? outputText : null,
+        latencyMs: duration,
+        operationName: kind === "translation" ? "translation" : "transcription",
+        providerName: "openai",
+      });
+    }
+    return result;
+  } catch (error) {
+    if (options?.observa?.trackError) {
+      options.observa.trackError({
+        errorType: (error as Error)?.name ?? "Error",
+        errorMessage: (error as Error)?.message ?? "Audio operation failed",
+        stackTrace: (error as Error)?.stack ?? null,
+        errorCategory: "model_error",
+        errorCode:
+          kind === "translation"
+            ? "translation_failed"
+            : "transcription_failed",
+      });
+    }
+    throw error;
+  }
+}
+
+/** Trace OpenAI moderations.create() - safety/guardrail */
+async function traceModerationsCall(
+  originalFn: Function,
+  args: any[],
+  options?: ObserveOptions,
+) {
+  const startTime = Date.now();
+  const req = args[0] || {};
+  const input = req.input;
+  const inputText =
+    typeof input === "string"
+      ? input
+      : Array.isArray(input)
+        ? input.join("\n")
+        : null;
+  try {
+    const result = await originalFn(...args);
+    const duration = Date.now() - startTime;
+    const data = result?.results?.[0] ?? result?.data?.[0] ?? result;
+    const outputText = data
+      ? JSON.stringify({ flagged: data.flagged, categories: data.categories })
+      : null;
+    if (options?.observa?.trackGuardrail) {
+      options.observa.trackGuardrail({
+        input: inputText != null ? inputText.substring(0, 5000) : null,
+        output: outputText,
+        latencyMs: duration,
+        operationName: "moderation",
+        providerName: "openai",
+        flagged: data?.flagged ?? null,
+        categories: data?.categories ?? null,
+      });
+    } else if (options?.observa?.trackLLMCall) {
+      options.observa.trackLLMCall({
+        model: "moderation",
+        input: inputText != null ? inputText.substring(0, 5000) : null,
+        output: outputText,
+        latencyMs: duration,
+        operationName: "moderation",
+        providerName: "openai",
+      });
+    }
+    return result;
+  } catch (error) {
+    if (options?.observa?.trackError) {
+      options.observa.trackError({
+        errorType: (error as Error)?.name ?? "Error",
+        errorMessage: (error as Error)?.message ?? "Moderation failed",
+        stackTrace: (error as Error)?.stack ?? null,
+        errorCategory: "validation_error",
+        errorCode: "moderation_failed",
+      });
+    }
+    throw error;
   }
 }
 

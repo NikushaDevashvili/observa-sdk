@@ -1,0 +1,14 @@
+DESCRIPTION >
+  Pre-aggregated cost by day and model. Target datasource for cost_daily_by_model materialized pipe. Use sumMerge(total_cost) and countMerge(event_count) when querying.
+
+SCHEMA >
+  `date` Date `json:$.date`,
+  `tenant_id` String `json:$.tenant_id`,
+  `project_id` String `json:$.project_id`,
+  `model` String `json:$.model`,
+  `total_cost` AggregateFunction(sum, Float64) `json:$.total_cost`,
+  `event_count` AggregateFunction(count, UInt64) `json:$.event_count`
+
+ENGINE "AggregatingMergeTree"
+ENGINE_PARTITION_KEY "toYYYYMM(date)"
+ENGINE_SORTING_KEY "tenant_id, project_id, date, model"
